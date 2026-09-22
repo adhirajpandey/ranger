@@ -1,0 +1,9 @@
+services:
+  app:
+    image: python:3.12-alpine
+    command: ["python", "/fixture/server.py"]
+    volumes:
+      - ./server.py:/fixture/server.py:ro
+    ports:
+      - "127.0.0.1:16740:8080"
+    restart: "no"
