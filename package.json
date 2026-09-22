@@ -1,0 +1,7 @@
+{
+  "name": "habitat-failover-tooling",
+  "private": true,
+  "devDependencies": {
+    "wrangler": "4.136.3"
+  }
+}

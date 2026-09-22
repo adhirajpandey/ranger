@@ -24,6 +24,8 @@ def load_config(path):
             raise ValueError("invalid workload, project or service")
         if not Path(item["compose_file"]).is_absolute():
             raise ValueError("compose_file must be absolute")
+        if item.get("env_file") and not Path(item["env_file"]).is_absolute():
+            raise ValueError("env_file must be absolute")
         if not 1 <= item["port"] <= 65535:
             raise ValueError("invalid port")
         if not item["health_path"].startswith("/") or "?" in item["health_path"]:
@@ -53,7 +55,10 @@ class Docker:
 
     @staticmethod
     def compose(item):
-        return ["compose", "-f", item["compose_file"], "-p", item["project"]]
+        args = ["compose", "-f", item["compose_file"], "-p", item["project"]]
+        if item.get("env_file"):
+            args.extend(["--env-file", item["env_file"]])
+        return args
 
     def available(self):
         self.run(["info", "--format", "{{.ServerVersion}}"], self.probe_timeout)
