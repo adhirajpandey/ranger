@@ -4,6 +4,8 @@ import asyncio
 import copy
 import re
 
+from habitat_failover.readiness import configure_readiness
+
 DEFAULTS = {
     "check_interval": 20,
     "probe_timeout": 5,
@@ -39,8 +41,7 @@ def validate_config(config):
             raise ValueError("zone_id and record_id must be Cloudflare IDs")
         if not re.fullmatch(r"[a-zA-Z0-9.-]+", workload["hostname"]):
             raise ValueError("invalid hostname")
-        if not workload["health_path"].startswith("/") or "?" in workload["health_path"]:
-            raise ValueError("invalid health_path")
+        configure_readiness(workload)
         if not 1 <= workload["port"] <= 65535:
             raise ValueError("invalid port")
     targets = [node["tunnel_target"] for node in config["nodes"].values()]
@@ -266,9 +267,9 @@ class Reconciler:
             if dns["content"] != self.config["nodes"][target]["tunnel_target"]:
                 raise RuntimeError("DNS changed during cutover; keeping both copies")
             public = await self.io.public(spec)
-            if public.get("node") != target or public.get("status") != "ok":
+            if public.get("http_status") not in spec["expected_status"]:
                 t["phase"], t["drain_until"] = "verifying", None
-                raise RuntimeError("public readiness has not confirmed destination")
+                raise RuntimeError("public readiness did not return an accepted HTTP status")
             if t["phase"] == "verifying":
                 t["phase"] = "draining"
                 t["drain_until"] = now + self.policy["drain_seconds"]

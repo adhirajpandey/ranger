@@ -48,5 +48,7 @@ class CloudflareIO:
         return await self.dns_request(spec, "PATCH", {"content": target})
 
     async def public(self, spec):
-        url = f"https://{spec['hostname']}{spec['health_path']}?failover_probe={time.time_ns()}"
-        return await self.request(url, headers={"Cache-Control": "no-cache, no-store"})
+        url = f"https://{spec['hostname']}{spec['readiness_path']}?failover_probe={time.time_ns()}"
+        return await self.request(
+            url, headers={"Cache-Control": "no-cache, no-store"}, status_only=True
+        )

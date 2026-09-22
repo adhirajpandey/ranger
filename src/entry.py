@@ -39,11 +39,13 @@ class Cluster(DurableObject):
         io = CloudflareIO(self.config, self.request, env.DNS_API_TOKEN, tokens)
         self.reconciler = Reconciler(self.config, self.store, io, time.time)
 
-    async def request(self, url, method="GET", headers=None, body=None, binding=None):
+    async def request(
+        self, url, method="GET", headers=None, body=None, binding=None, status_only=False
+    ):
         options = {
             "method": method,
-            "headers": {"Accept": "application/json", **(headers or {})},
-            "redirect": "error",
+            "headers": {"Accept": "*/*" if status_only else "application/json", **(headers or {})},
+            "redirect": "manual" if status_only else "error",
             "signal": AbortSignal.timeout(self.config["policy"]["probe_timeout"] * 1000),
         }
         if body is not None:
@@ -53,6 +55,10 @@ class Cluster(DurableObject):
         try:
             outgoing = JSRequest.new(url, to_js(options, dict_converter=Object.fromEntries))
             response = await fetch(outgoing)
+            if status_only:
+                if response.body is not None:
+                    await response.body.cancel()
+                return {"http_status": response.status}
             if not 200 <= response.status < 300:
                 raise RuntimeError(f"HTTP {response.status}")
             return json.loads(await response.text())

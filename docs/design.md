@@ -11,7 +11,7 @@ failures, two readiness successes at least five seconds apart, a 120-second
 startup deadline, five-minute recovery stability, and a 45-second drain.
 
 Failover starts the alternative copy, verifies readiness, updates DNS by the
-configured zone and record IDs, verifies public node identity, then drains and
+configured zone and record IDs, verifies public HTTP status, then drains and
 stops the old copy. Both unhealthy leaves DNS unchanged. DNS uncertainty keeps
 copies running. An unknown DNS target is reported and left untouched.
 Failback follows continuous preferred-node stability and the same cutover steps.
@@ -23,9 +23,11 @@ tunnel configuration. Images are built before enrollment, then preloaded or
 pulled from a registry during startup. Failover never builds images.
 
 Infinite-Memes uses white-box, black-box, port 6704, and
-`memes.adhirajpandey.tech`. Its `/healthz` endpoint checks the local HTTP process,
-returns node and release identity, and disables caching. Release identity is
-observable, not an eligibility condition. Upstream meme API health is excluded.
+`memes.adhirajpandey.tech`. Agents probe its existing `/` page and accept HTTP 200.
+No dedicated endpoint or JSON response is required. This page depends on the
+external meme API, so a shared upstream outage can fail readiness on both hosts.
+DNS readback and public HTTP status do not prove which host served a response.
+Public probe paths require an explicit Cloudflare cache bypass.
 
 Four test groups cover agent convergence and access control, failover and failed
 replacement, stable recovery, and restart during transition. Live VPC, tunnel,

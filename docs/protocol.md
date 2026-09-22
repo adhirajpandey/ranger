@@ -9,7 +9,7 @@ route. The Worker requires the separate status token on `GET /status`.
 | --- | --- |
 | `GET /health` | Node name, Docker availability, configuration revision |
 | `GET /workloads` | Configured workload names mapped to observations |
-| `GET /workloads/:name/health` | Running state, readiness, node, release, operation state |
+| `GET /workloads/:name/health` | Running state, readiness, agent node, http_status, operation state |
 | `POST /workloads/:name/start` | HTTP 202 while the idempotent start operation runs |
 | `POST /workloads/:name/stop` | HTTP 202 while the idempotent stop operation runs |
 
@@ -28,8 +28,17 @@ already be independently available. It stops containers without deleting data.
 
 Agent configuration permits an optional absolute `env_file` for Compose
 interpolation. Readiness always targets loopback at the configured host port.
-It requires HTTP 200, `status: ok`, the expected node, a running container, and
-healthy Docker health status when a Docker healthcheck exists.
+It requires an accepted HTTP status, a running container, and healthy Docker
+health status when a Docker healthcheck exists. No application body is parsed.
+`readiness_path` defaults to `/`; `expected_status` defaults to `[200]` and accepts
+a nonempty list of integer statuses from 200 through 599. The path must be local,
+without a query or fragment. Legacy `health_path` is rejected with a migration
+message. Configure the same policy on agents and the controller.
+
+`http_status` is the observed status or null if no HTTP response arrived. `node`
+is supplied by the agent, not the application. Application release identity is
+no longer reported. Redirects are not followed, but an explicitly accepted
+redirect or error status can pass readiness.
 
 ## Controller state
 
@@ -49,5 +58,7 @@ Returning nodes do not gain traffic merely because their Docker processes start.
 DNS updates use configured zone and record IDs with a PATCH of `content` only.
 Unknown targets or mismatched record metadata are reported.
 
-Release identity is informational. Readiness excludes the upstream meme API.
+Public verification uses DNS readback plus an accepted HTTP status, not serving
+node identity. Cache bypass must be configured for the public probe path.
+Infinite-Memes probes `/`, which depends on the upstream meme API.
 Failover does not preserve in-flight requests or existing connections.

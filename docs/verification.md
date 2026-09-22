@@ -1,6 +1,28 @@
 # Implementation verification
 
-Captured on 2026-09-22. These results cover code and disposable fixtures.
+## HTTP-status readiness update, 2026-09-23
+
+- `RUN_DOCKER_TESTS=1 uv run pytest -q`: 38 passed, including the disposable
+  Compose integration and ordinary HTML readiness responses.
+- Ruff lint and formatting checks passed for source, tests, and scripts.
+- `uv run pywrangler deploy --dry-run` packaged the Worker successfully.
+- The cluster example and both agent examples validated with matching readiness
+  paths and accepted statuses. Both standalone Compose configurations validated.
+- Rebuilt `infinite-memes:http-readiness-check` on arm64 and ran the revised image
+  smoke script. The existing homepage returned HTTP 200 with outbound networking.
+  The temporary smoke container was removed; the local image remains available.
+- Tests cover accepted non-2xx statuses, redirects without following them,
+  refused connections, timeouts, container health, configuration migration,
+  status-only Worker transport, and public failure resetting the drain period.
+
+These checks do not establish live Cloudflare cache bypass, DNS convergence,
+Workers VPC routing, or serving-node identity. Repeat the changed image check on
+the other architecture before enrollment. No live deployment was performed.
+
+## Historical endpoint-based verification
+
+Historical checks captured on 2026-09-22 for the former JSON health contract.
+These results do not validate the later HTTP-status readiness change.
 No controller, agent unit, tunnel mapping, or live DNS change was deployed.
 
 ## Completed checks
@@ -36,7 +58,8 @@ removed. Local candidate images remain available for inspection:
 
 Both candidate images identify their release as `failover-v1-candidate`.
 Their application code matches Infinite-Memes commit `166c8f6`. Rebuild with the
-full source commit as `RELEASE_ID` before enrollment. No image was published.
+full source commit as the image tag before enrollment. The revised image no
+longer embeds a health-response `RELEASE_ID`. No image was published.
 The image check required pinning setuptools 80.9.0 for the existing Gunicorn
 version's `pkg_resources` import. Existing application dependency pins remain.
 

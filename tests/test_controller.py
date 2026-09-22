@@ -15,7 +15,7 @@ CONFIG = {
             "fallback_node": "black-box",
             "port": 6704,
             "hostname": "memes.example.com",
-            "health_path": "/healthz",
+            "readiness_path": "/",
             "overlap_safe": True,
             "zone_id": "a" * 32,
             "record_id": "b" * 32,
@@ -68,7 +68,7 @@ class IO:
         self.routed = node
 
     async def public(self, spec):
-        return {"status": "ok", "node": self.routed if self.public_ok else "old-node"}
+        return {"http_status": 200 if self.public_ok else 503}
 
     async def change(self, node, name, action):
         if action == "start" and self.fail_start:
@@ -161,3 +161,20 @@ async def test_restart_continues_transition_and_public_check_gates_cleanup():
     await c.advance(60)
     assert not c.io.running["white-box"]
     assert c.store.value["workloads"]["memes"]["transition"] is None
+
+
+async def test_public_failure_restarts_drain():
+    c = Cluster()
+    await c.tick()
+    c.io.healthy["white-box"] = False
+    await c.advance(80)
+    assert c.store.value["workloads"]["memes"]["transition"]["phase"] == "draining"
+    c.io.public_ok = False
+    await c.advance(60)
+    assert c.io.running["white-box"]
+    assert c.store.value["workloads"]["memes"]["transition"]["drain_until"] is None
+    c.io.public_ok = True
+    await c.advance(40)
+    assert c.io.running["white-box"]
+    await c.advance(20)
+    assert not c.io.running["white-box"]

@@ -25,7 +25,7 @@ The locked development environment includes a recent `uv` for Workers tooling.
 ## Prepare images and hosts
 
 1. Build Infinite-Memes from the same committed revision on both architectures.
-   Set the Docker build argument `RELEASE_ID` to that revision.
+   Tag images with that revision; rebuild old health-endpoint candidate images.
 2. Run `python3 scripts/smoke-image.py IMAGE` in each application checkout.
 3. Preload images or make immutable registry references available to both hosts.
    Authenticate the agent's OS user to a private registry if needed.
@@ -62,8 +62,10 @@ name. Do not run both deployment procedures independently after enrollment.
 2. Add `memes.adhirajpandey.tech -> http://127.0.0.1:6704` to both tunnels as a
    static mapping. Preserve existing mappings and the final fallback.
    Avoid dashboard actions that silently change the current DNS target.
-3. Bypass caching for `/healthz`. Preserve `no-store` from the origin and verify
-   the public response is not a cached copy.
+3. Bypass caching for the configured probe path, initially `/`. Verify the public
+   response is not cached. Probe query strings and request headers alone are
+   insufficient. Use matching `readiness_path` and `expected_status` on the
+   controller and both agents; replace all legacy `health_path` fields.
 4. Create one HTTP VPC Service per node, targeting `127.0.0.1:6720` through its
    tunnel. Use Shed's `vpc-services.example.json` as the configuration reference.
    Verify this private route end to end before activation. Do not add public
@@ -82,8 +84,9 @@ routing before enrollment. These are not reasons to expose an agent.
 ## Enroll and initialize
 
 1. Verify the new image on white-box and recreate only Infinite-Memes with
-   `compose.failover.yml`. Confirm local and public `/healthz` identify
-   white-box. Keep the black-box copy stopped.
+   `compose.failover.yml`. Confirm local and public `/` return HTTP 200 and DNS points to
+   white-box. A public response does not prove serving-node identity.
+   Keep the black-box copy stopped.
 2. From this repository, render bootstrap configuration:
 
    ```sh
@@ -111,12 +114,13 @@ unchanged across ordinary deployments.
 
 1. Record the normal DNS target and both agent observations.
 2. Stop only the preferred application as a controlled failure. Observe the
-   threshold, replacement readiness, DNS write, and public node identity.
+   threshold, replacement readiness, DNS write, and accepted public HTTP status.
 3. Record the time from first failed request to sustained public recovery.
    DNS API acknowledgement alone does not establish cutover time.
 4. Verify the old copy stops after the 45-second drain and the fallback serves.
 5. Verify failback waits for five minutes of stability before starting and
-   validating the preferred copy. Confirm public traffic returns to white-box.
+   validating the preferred copy. Confirm DNS points to white-box and public
+   HTTP readiness passes.
 6. Schedule host shutdown and network-loss drills separately. Avoid stopping
    Docker or cloudflared during application-only acceptance.
 

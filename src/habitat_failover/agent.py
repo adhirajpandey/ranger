@@ -7,10 +7,13 @@ import os
 import re
 import subprocess
 import threading
+import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
+
+from habitat_failover.readiness import configure_readiness
 
 NAME = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]*\Z")
 
@@ -28,8 +31,7 @@ def load_config(path):
             raise ValueError("env_file must be absolute")
         if not 1 <= item["port"] <= 65535:
             raise ValueError("invalid port")
-        if not item["health_path"].startswith("/") or "?" in item["health_path"]:
-            raise ValueError("invalid health_path")
+        configure_readiness(item)
         if item.get("pull", "missing") not in {"never", "missing", "always"}:
             raise ValueError("invalid pull policy")
     return config
@@ -68,7 +70,7 @@ class Docker:
             [*self.compose(item), "ps", "--all", "--quiet", item["service"]],
             self.probe_timeout,
         ).split()
-        result = {"running": False, "ready": False, "node": node, "release": None}
+        result = {"running": False, "ready": False, "node": node, "http_status": None}
         if not ids:
             return result
         if len(ids) != 1:
@@ -83,7 +85,7 @@ class Docker:
         result["docker_health"] = state.get("Health", {}).get("Status", "none")
         if not result["running"]:
             return result
-        url = f"http://127.0.0.1:{item['port']}{item['health_path']}"
+        url = f"http://127.0.0.1:{item['port']}{item.get('readiness_path', '/')}"
         request = urllib.request.Request(url, headers={"Cache-Control": "no-cache"})
         try:
             # No proxy or redirects: readiness must come from the configured local origin.
@@ -92,15 +94,15 @@ class Docker:
                     return None
 
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-            with opener.open(request, timeout=self.probe_timeout) as response:
-                health = json.loads(response.read(65536))
-                result["ready"] = (
-                    response.status == 200
-                    and health.get("node") == node
-                    and health.get("status") == "ok"
-                    and result["docker_health"] in {"none", "healthy"}
-                )
-                result["release"] = health.get("release")
+            try:
+                response = opener.open(request, timeout=self.probe_timeout)
+            except urllib.error.HTTPError as exc:
+                response = exc
+            with response:
+                result["http_status"] = response.code
+                result["ready"] = response.code in item.get("expected_status", [200]) and result[
+                    "docker_health"
+                ] in {"none", "healthy"}
         except (OSError, ValueError):
             pass
         return result
@@ -146,7 +148,13 @@ class Agent:
         try:
             result = self.docker.observe(item, self.config["node"])
         except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
-            result = {"running": False, "ready": False, "error": type(exc).__name__}
+            result = {
+                "running": False,
+                "ready": False,
+                "node": self.config["node"],
+                "http_status": None,
+                "error": type(exc).__name__,
+            }
         with self.guard:
             return {**result, "operation": dict(self.operations[name])}
 

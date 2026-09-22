@@ -86,7 +86,7 @@ def test_real_compose_agent():
         "project": f"habitat-failover-test-{os.getpid()}",
         "service": "app",
         "port": 16740,
-        "health_path": "/healthz",
+        "readiness_path": "/",
         "pull": "missing",
     }
     docker = Docker()
