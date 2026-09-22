@@ -11,6 +11,7 @@ migration and strict single ownership are outside v1.
 This repository owns the controller, agents, protocol, and tests. Shed owns
 site deployment files. Infinite-Memes owns its readiness endpoint and image.
 
-See [the design](docs/design.md) for the accepted contract.
+See [the design](docs/design.md), [protocol reference](docs/protocol.md),
+[rollout procedure](docs/operations.md), and [verification](docs/verification.md).
 
-Status: implementation in progress. Nothing has been deployed.
+Status: implemented and locally tested. Live rollout remains pending.
