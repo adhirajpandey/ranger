@@ -45,7 +45,7 @@ class Cluster(DurableObject):
         options = {
             "method": method,
             "headers": {"Accept": "*/*" if status_only else "application/json", **(headers or {})},
-            "redirect": "manual" if status_only else "error",
+            "redirect": "manual",
             "signal": AbortSignal.timeout(self.config["policy"]["probe_timeout"] * 1000),
         }
         if body is not None:
@@ -63,7 +63,13 @@ class Cluster(DurableObject):
                 raise RuntimeError(f"HTTP {response.status}")
             return json.loads(await response.text())
         except Exception as exc:
-            raise RuntimeError(f"HTTP request failed: {type(exc).__name__}") from None
+            detail = str(exc)
+            authorization = (headers or {}).get("Authorization")
+            if authorization:
+                detail = detail.replace(authorization, "[redacted]")
+            raise RuntimeError(
+                f"HTTP request failed: {type(exc).__name__}: {detail[:200]}"
+            ) from None
 
     async def fetch(self, request):
         if urlsplit(request.url).path == "/initialize":
@@ -101,7 +107,7 @@ class Default(WorkerEntrypoint):
             return Response("unauthorized", status=401)
         return await self.env.CLUSTER.getByName("habitat-v1").fetch(request)
 
-    async def scheduled(self, controller, ctx):
+    async def scheduled(self, controller, env, ctx):
         # A temporary deployment bootstrap Cron creates the first alarm, then is removed.
         await self.env.CLUSTER.getByName("habitat-v1").fetch(
             Request("http://internal/initialize", method="POST")

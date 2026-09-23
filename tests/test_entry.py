@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -32,6 +32,7 @@ def transport(monkeypatch):
     spec.loader.exec_module(module)
     cluster = object.__new__(module.Cluster)
     cluster.config = {"policy": {"probe_timeout": 5}}
+    cluster.entry_module = module
     return cluster, fetch
 
 
@@ -60,8 +61,25 @@ async def test_management_transport_retains_json_and_success_requirement(transpo
         "ok": True
     }
     options = fetch.call_args.args[0][1]
-    assert options["redirect"] == "error"
+    assert options["redirect"] == "manual"
     assert json.loads(options["body"]) == {"content": "target"}
     fetch.return_value.status = 401
     with pytest.raises(RuntimeError):
         await cluster.request("https://example.com/api")
+
+
+async def test_scheduled_bootstrap_initializes_named_cluster(transport):
+    cluster, _ = transport
+    module = cluster.entry_module
+    request = object()
+    module.Request = Mock(return_value=request)
+    stub = SimpleNamespace(fetch=AsyncMock())
+    binding = SimpleNamespace(getByName=Mock(return_value=stub))
+    handler = object.__new__(module.Default)
+    handler.env = SimpleNamespace(CLUSTER=binding)
+
+    await handler.scheduled(SimpleNamespace(), handler.env, SimpleNamespace())
+
+    binding.getByName.assert_called_once_with("habitat-v1")
+    module.Request.assert_called_once_with("http://internal/initialize", method="POST")
+    stub.fetch.assert_awaited_once_with(request)
