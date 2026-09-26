@@ -1,6 +1,6 @@
-# Habitat failover
+# Ranger
 
-Habitat failover moves selected Docker Compose workloads between two hosts when
+Ranger moves selected Docker Compose workloads between two hosts when
 the host currently serving them stops being healthy.
 
 The two hosts are:
@@ -225,7 +225,9 @@ historical arm64 and amd64 checks of the former health endpoint.
 Public probe paths require a Cloudflare cache bypass. Request no-cache headers
 and unique query strings alone do not guarantee an origin response.
 
-The code has not been deployed. Workers VPC connectivity, the two static tunnel
-routes, live DNS cutover time, and disruptive host drills remain pending. See
-the [rollout procedure](docs/operations.md) and [verification record](docs/verification.md)
-before making changes to the live hosts.
+The previous deployment completed an application-only failover drill on
+24 September 2026. It was retired on 26 September during the Ranger rename.
+Ranger is currently undeployed. Infinite-Memes runs independently on white-box.
+See the [retirement record](docs/rename-2026-09-26.md),
+[rollout procedure](docs/operations.md), and
+[historical verification record](docs/verification.md).

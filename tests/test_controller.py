@@ -2,7 +2,7 @@ import copy
 
 import pytest
 
-from habitat_failover.controller import Reconciler
+from ranger.controller import Reconciler
 
 CONFIG = {
     "nodes": {

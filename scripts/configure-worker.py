@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from habitat_failover.controller import validate_config
+from ranger.controller import validate_config
 
 parser = argparse.ArgumentParser()
 parser.add_argument("cluster", type=Path)

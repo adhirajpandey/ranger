@@ -5,8 +5,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from habitat_failover.agent import Docker
-from habitat_failover.readiness import configure_readiness
+from ranger.agent import Docker
+from ranger.readiness import configure_readiness
 
 
 @pytest.mark.parametrize(

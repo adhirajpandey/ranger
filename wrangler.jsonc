@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "habitat-failover",
+  "name": "ranger",
   "main": "src/entry.py",
   "compatibility_date": "2026-09-22",
   "compatibility_flags": ["python_workers"],
