@@ -11,8 +11,8 @@ from js import fetch as js_fetch
 from pyodide.ffi import to_js
 from workers import DurableObject, Request, Response, WorkerEntrypoint
 
-from habitat_failover.cloudflare import CloudflareIO
-from habitat_failover.controller import Reconciler, validate_config
+from ranger.cloudflare import CloudflareIO
+from ranger.controller import Reconciler, validate_config
 
 
 class DurableStore:
@@ -105,10 +105,10 @@ class Default(WorkerEntrypoint):
             provided.encode(), f"Bearer {token}".encode()
         ):
             return Response("unauthorized", status=401)
-        return await self.env.CLUSTER.getByName("habitat-v1").fetch(request)
+        return await self.env.CLUSTER.getByName("ranger-v1").fetch(request)
 
     async def scheduled(self, controller, env, ctx):
         # A temporary deployment bootstrap Cron creates the first alarm, then is removed.
-        await self.env.CLUSTER.getByName("habitat-v1").fetch(
+        await self.env.CLUSTER.getByName("ranger-v1").fetch(
             Request("http://internal/initialize", method="POST")
         )

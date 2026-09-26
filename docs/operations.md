@@ -1,8 +1,13 @@
 # Prepare and operate the pilot
 
-This procedure is for a later live rollout. Implementation validation does not
-authorize running deployment steps. See [verification](verification.md) for
-completed checks and pending live acceptance.
+Use this procedure for a fresh Ranger deployment. The previous controller,
+Durable Object state, and VPC services were deleted during the rename.
+Start with new credentials and service IDs. See the
+[retirement record](rename-2026-09-26.md) for the current state.
+
+Ranger is intentionally undeployed. Infinite-Memes currently uses its original
+standalone Compose definition on white-box with `restart: unless-stopped`.
+Deployment and live drills belong to a separate, explicitly requested task.
 
 ## Check the code
 
@@ -29,24 +34,24 @@ The locked development environment includes a recent `uv` for Workers tooling.
 2. Run `python3 scripts/smoke-image.py IMAGE` in each application checkout.
 3. Preload images or make immutable registry references available to both hosts.
    Authenticate the agent's OS user to a private registry if needed.
-4. Copy each Shed `failover.env.example` to `failover.env`. Set `FAILOVER_IMAGE`
-   to the prebuilt image. Never add build instructions to `compose.failover.yml`.
+4. Copy each Shed `ranger.env.example` to `ranger.env`. Set `RANGER_IMAGE`
+   to the prebuilt image. Never add build instructions to `compose.ranger.yml`.
 5. Validate each standalone Compose file:
 
    ```sh
-   docker compose -f compose.failover.yml --env-file failover.env -p infinite-memes config --quiet
+   docker compose -f compose.ranger.yml --env-file ranger.env -p infinite-memes config --quiet
    ```
 
-6. Install this repository at `/home/adhiraj/projects/habitat-failover` on each
+6. Install this repository at `/home/adhiraj/projects/ranger` on each
    host. Create `.venv` with Python 3.12 or newer. The agent has no third-party
    runtime dependencies. Do not replace the host's system Python.
 7. Copy the host's Shed `agent.example.json` to
-   `/etc/habitat-failover/agent.json`. Use the existing `adhiraj` Docker user.
+   `/etc/ranger/agent.json`. Use the existing `adhiraj` Docker user.
 8. Generate a separate random token of at least 32 characters for each agent.
-   Put `AGENT_TOKEN=...` in `/etc/habitat-failover/agent.env`, readable only by
+   Put `AGENT_TOKEN=...` in `/etc/ranger/agent.env`, readable only by
    root. Keep Compose files and agent configuration writable only by trusted
    operators. Docker access grants control of the host.
-9. Install `deploy/habitat-failover-agent.service` in `/etc/systemd/system`.
+9. Install `deploy/ranger-agent.service` in `/etc/systemd/system`.
    Run `systemctl daemon-reload` and enable and start the unit on each host.
 10. Verify authenticated local `/health` and `/workloads` requests. Confirm that
     the agent listens only on loopback port 6720.
@@ -66,12 +71,12 @@ name. Do not run both deployment procedures independently after enrollment.
    response is not cached. Probe query strings and request headers alone are
    insufficient. Use matching `readiness_path` and `expected_status` on the
    controller and both agents; replace all legacy `health_path` fields.
-4. Create one HTTP VPC Service per node, targeting `127.0.0.1:6720` through its
-   tunnel. Use Shed's `vpc-services.example.json` as the configuration reference.
+4. Create `ranger-agent-black-box` and `ranger-agent-white-box` as HTTP VPC
+   services targeting `127.0.0.1:6720` through their respective tunnels. Use Shed's `vpc-services.example.json` as the configuration reference.
    Verify this private route end to end before activation. Do not add public
    agent hostnames or broaden network exposure to bypass a routing failure.
-5. Copy Shed's `cluster.example.json` to `cluster.local.json`. Fill both VPC
-   Service IDs. Recheck the zone ID, record ID, and tunnel targets against
+5. Copy `../shed/ranger/cluster.example.json` to
+   `../shed/ranger/cluster.local.json`. Fill both VPC Service IDs. Recheck the zone ID, record ID, and tunnel targets against
    Cloudflare. IDs are provisioned once, never discovered during failover.
 6. Create a runtime token limited to DNS Read and DNS Edit on the single
    `adhirajpandey.tech` zone. Cloudflare does not scope this token to one record.
@@ -84,22 +89,23 @@ routing before enrollment. These are not reasons to expose an agent.
 ## Enroll and initialize
 
 1. Verify the new image on white-box and recreate only Infinite-Memes with
-   `compose.failover.yml`. Confirm local and public `/` return HTTP 200 and DNS points to
+   `compose.ranger.yml`. Confirm local and public `/` return HTTP 200 and DNS points to
    white-box. A public response does not prove serving-node identity.
    Keep the black-box copy stopped.
 2. From this repository, render bootstrap configuration:
 
    ```sh
-   PYTHONPATH=src uv run python scripts/configure-worker.py ../shed/failover/cluster.local.json --bootstrap
+   PYTHONPATH=src uv run python scripts/configure-worker.py ../shed/ranger/cluster.local.json --bootstrap
    ```
 
 3. Set Worker secrets `DNS_API_TOKEN`, `STATUS_TOKEN`, `BLACK_BOX_TOKEN`, and
    `WHITE_BOX_TOKEN` using `uv run pywrangler secret put NAME --config
    wrangler.local.jsonc`. Match agent tokens and use at least 32 random
    characters for `STATUS_TOKEN`. Never commit secrets or shell transcripts.
-4. Deploy with `uv run pywrangler deploy --config wrangler.local.jsonc`.
-   The temporary minute Cron invokes an internal Durable Object initialization
-   path. It only schedules a missing alarm. There is no public initialization API.
+4. Deploy Worker `ranger` with `uv run pywrangler deploy --config wrangler.local.jsonc`.
+   The fresh `v1` migration creates the `Cluster` namespace.
+   Both entrypoints select singleton `ranger-v1`. The temporary minute Cron
+   invokes an internal Durable Object initialization path. It only schedules a missing alarm. There is no public initialization API.
 5. Query authenticated `GET /status`. Wait for `last_cycle` and verify both
    observations and the white-box DNS target. Confirm private probes work.
 6. Render again without `--bootstrap`, then deploy that configuration. This

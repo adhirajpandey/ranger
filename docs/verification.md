@@ -1,5 +1,10 @@
 # Implementation verification
 
+This is the historical implementation verification record. The subsequent
+[live acceptance drill](live-acceptance-2026-09-24.md) and
+[Ranger retirement record](rename-2026-09-26.md) supersede its deployment status.
+Commands and image names below retain their original spelling.
+
 ## HTTP-status readiness update, 2026-09-23
 
 - `RUN_DOCKER_TESTS=1 uv run pytest -q`: 38 passed, including the disposable

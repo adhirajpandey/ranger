@@ -80,6 +80,6 @@ async def test_scheduled_bootstrap_initializes_named_cluster(transport):
 
     await handler.scheduled(SimpleNamespace(), handler.env, SimpleNamespace())
 
-    binding.getByName.assert_called_once_with("habitat-v1")
+    binding.getByName.assert_called_once_with("ranger-v1")
     module.Request.assert_called_once_with("http://internal/initialize", method="POST")
     stub.fetch.assert_awaited_once_with(request)

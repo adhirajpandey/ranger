@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from habitat_failover.agent import Agent, Docker, handler_for
+from ranger.agent import Agent, Docker, handler_for
 
 TOKEN = "test-token-" * 4
 
@@ -83,7 +83,7 @@ def test_agent_contract():
 def test_real_compose_agent():
     item = {
         "compose_file": str(Path(__file__).parent / "fixture/compose.yaml"),
-        "project": f"habitat-failover-test-{os.getpid()}",
+        "project": f"ranger-test-{os.getpid()}",
         "service": "app",
         "port": 16740,
         "readiness_path": "/",

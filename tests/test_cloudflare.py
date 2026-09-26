@@ -1,4 +1,4 @@
-from habitat_failover.cloudflare import CloudflareIO
+from ranger.cloudflare import CloudflareIO
 
 
 async def test_dns_uses_only_configured_record_id():

@@ -4,7 +4,7 @@ import asyncio
 import copy
 import re
 
-from habitat_failover.readiness import configure_readiness
+from ranger.readiness import configure_readiness
 
 DEFAULTS = {
     "check_interval": 20,

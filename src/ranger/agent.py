@@ -1,4 +1,4 @@
-"""Authenticated, allowlisted Compose control. Run with python -m habitat_failover.agent."""
+"""Authenticated, allowlisted Compose control. Run with python -m ranger.agent."""
 
 import argparse
 import hmac
@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from habitat_failover.readiness import configure_readiness
+from ranger.readiness import configure_readiness
 
 NAME = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]*\Z")
 
