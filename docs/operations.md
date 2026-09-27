@@ -26,9 +26,17 @@ Do this once for each workload, on both hosts.
 1. Build the workload's image for both hosts' CPU architectures, or push a
    multi-architecture image to a registry. Ranger never builds images during a
    failover.
-2. Write a Compose file that runs the image. Bind the published port to
-   `127.0.0.1` and set `restart: "no"`. Without that, Docker starts the standby
-   copy on every boot, and two copies run when nobody asked for them.
+2. Use the workload's existing Compose file, or write one. The file must meet
+   these requirements:
+
+   - The service runs the image from step 1 and runs exactly one container.
+   - The service publishes its port on the host. Bind it to `127.0.0.1` so
+     that only the tunnel and the agent reach it.
+   - The restart policy is not `always`. With `always`, Docker restarts the
+     stopped standby when the host or Docker restarts, and two copies run.
+     `unless-stopped` and `"no"` both work.
+
+   Pin an image tag that names one build, so both hosts run the same version.
 3. Check that the Compose file is valid:
 
    ```sh
@@ -41,8 +49,11 @@ Do this once for each workload, on both hosts.
    tunnel, `<tunnel-id>.cfargotunnel.com`. Note the zone ID and the record ID.
    Some dashboard actions on tunnel routes rewrite this record, so recheck it
    after changing a route.
-6. Add a Cache Rule that bypasses the cache for the hostname's readiness path.
-   Without it, the public readiness check can pass on a cached response.
+6. Make sure Cloudflare does not cache the hostname's readiness path. Request
+   the path and read the `cf-cache-status` header. `DYNAMIC` means Cloudflare
+   does not cache it. For any other value, add a Cache Rule that bypasses the
+   cache for the path. Otherwise the public readiness check can pass on a
+   cached response.
 7. Start the workload on the preferred host only.
 
 ## Install the agent

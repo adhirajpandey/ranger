@@ -94,6 +94,12 @@ Each workload has these keys:
 | `expected_status` | No | `[200]` | HTTP statuses that count as ready |
 | `pull` | No | `missing` | Compose pull policy on start: `never`, `missing`, or `always` |
 
+`compose_file` can be the workload's existing Compose file. The agent starts
+the service with `--no-build`, so its image must already exist on the host or
+be pullable. The service must publish `port` on the host. A restart policy of
+`always` restarts a stopped standby whenever Docker restarts. `unless-stopped`
+and `"no"` leave it stopped.
+
 ## Commands
 
 ### `ranger-agent`
