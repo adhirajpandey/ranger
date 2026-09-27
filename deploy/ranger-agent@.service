@@ -1,0 +1,24 @@
+# Runs the agent as the user named after @, for example ranger-agent@deploy.
+# That user installs the agent with `uv tool install` and must be in the docker
+# group. Docker access is equivalent to root on the host.
+[Unit]
+Description=Ranger node agent for %i
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+SupplementaryGroups=docker
+EnvironmentFile=/etc/ranger-agent/agent.env
+ExecStart=/home/%i/.local/bin/ranger-agent
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target
