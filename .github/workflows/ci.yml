@@ -39,3 +39,8 @@ jobs:
 
       - name: Package the Worker
         run: uv run pywrangler deploy --dry-run
+
+      - name: Install the agent as a uv tool
+        run: |
+          uv tool install .
+          "$(uv tool dir --bin)/ranger-agent" --help

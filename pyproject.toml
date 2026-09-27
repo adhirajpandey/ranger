@@ -5,6 +5,13 @@ description = "Preferred-node failover for two Docker Compose hosts"
 requires-python = ">=3.12"
 dependencies = []
 
+[project.scripts]
+ranger-agent = "ranger.agent:main"
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
 [dependency-groups]
 dev = [
     "pytest>=8,<9",
