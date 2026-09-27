@@ -42,17 +42,24 @@ The locked development environment includes a recent `uv` for Workers tooling.
    docker compose -f compose.ranger.yml --env-file ranger.env -p infinite-memes config --quiet
    ```
 
-6. Install this repository at `/home/adhiraj/projects/ranger` on each
-   host. Create `.venv` with Python 3.12 or newer. The agent has no third-party
-   runtime dependencies. Do not replace the host's system Python.
-7. Copy the host's Shed `agent.example.json` to
-   `/etc/ranger/agent.json`. Use the existing `adhiraj` Docker user.
+6. As the Docker user on each host, install the agent. uv supplies Python 3.12
+   or newer if the host lacks it; the agent has no third-party dependencies.
+
+   ```sh
+   uv tool install git+https://github.com/adhirajpandey/ranger
+   ```
+
+   Upgrade later with `uv tool upgrade ranger`, then restart the unit.
+7. Copy the host's agent configuration to `/etc/ranger-agent/agent.json`.
+   [`examples/agent.json`](../examples/agent.json) shows the format.
 8. Generate one random token of at least 32 characters, shared by both agents.
-   Put `AGENT_TOKEN=...` in `/etc/ranger/agent.env`, readable only by
+   Put `AGENT_TOKEN=...` in `/etc/ranger-agent/agent.env`, readable only by
    root. Keep Compose files and agent configuration writable only by trusted
    operators. Docker access grants control of the host.
-9. Install `deploy/ranger-agent.service` in `/etc/systemd/system`.
-   Run `systemctl daemon-reload` and enable and start the unit on each host.
+9. Install [`deploy/ranger-agent@.service`](../deploy/ranger-agent@.service) in
+   `/etc/systemd/system`. Run `systemctl daemon-reload`, then
+   `systemctl enable --now ranger-agent@USER`, where `USER` is the Docker user
+   from step 6.
 10. Verify authenticated local `/health` and `/workloads/NAME/health` requests. Confirm that
     the agent listens only on loopback port 6720.
 
