@@ -1,0 +1,15 @@
+{
+  "node": "node-a",
+  "workloads": {
+    "example-app": {
+      "compose_file": "/srv/example-app/compose.yaml",
+      "env_file": "/srv/example-app/app.env",
+      "project": "example-app",
+      "service": "app",
+      "port": 3000,
+      "readiness_path": "/",
+      "expected_status": [200],
+      "pull": "missing"
+    }
+  }
+}

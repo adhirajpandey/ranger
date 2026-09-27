@@ -1,4 +1,4 @@
-"""Authenticated, allowlisted Compose control. Run with python -m ranger.agent."""
+"""Authenticated, allowlisted Compose control. Installed as the ranger-agent command."""
 
 import argparse
 import hmac
@@ -230,7 +230,7 @@ def handler_for(agent, token):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", required=True)
+    parser.add_argument("--config", default="/etc/ranger-agent/agent.json")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=6720)
     args = parser.parse_args()
