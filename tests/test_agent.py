@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import threading
 import time
 import urllib.error
@@ -113,3 +114,27 @@ def test_real_compose_agent():
         exercise_agent(Agent({"node": "test-node", "workloads": {"test": item}}, docker))
     finally:
         docker.run([*docker.compose(item), "down", "--remove-orphans"])
+
+
+def test_docker_failure_keeps_diagnostics_on_the_host(monkeypatch, caplog):
+    def run(*args, **kwargs):
+        return subprocess.CompletedProcess(args, 1, "", "pull denied for registry-password\n")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    with pytest.raises(RuntimeError) as error:
+        Docker().run(["compose", "up", "app"])
+    assert str(error.value) == "docker command exited with code 1"
+    assert "registry-password" in caplog.text
+    assert "compose up app" in caplog.text
+
+
+def test_failed_action_is_reported_and_logged(caplog):
+    class BrokenDocker(FakeDocker):
+        def change(self, item, action):
+            raise RuntimeError("docker command exited with code 1")
+
+    agent = Agent({"node": "test-node", "workloads": {"test": {}}}, BrokenDocker())
+    assert agent.change("test", "start") == 202
+    eventually(lambda: agent.observe("test")["operation"]["pending"] is None)
+    assert agent.observe("test")["operation"]["error"] == "docker command exited with code 1"
+    assert "start test failed" in caplog.text
