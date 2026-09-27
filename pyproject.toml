@@ -2,6 +2,8 @@
 name = "ranger"
 version = "0.1.0"
 description = "Preferred-node failover for two Docker Compose hosts"
+license = "MIT"
+readme = "README.md"
 requires-python = ">=3.12"
 dependencies = []
 
