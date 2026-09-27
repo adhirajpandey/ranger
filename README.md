@@ -1,235 +1,136 @@
 # Ranger
 
-Ranger moves selected Docker Compose workloads between two hosts when
-the host currently serving them stops being healthy.
+[![CI](https://github.com/adhirajpandey/ranger/actions/workflows/ci.yml/badge.svg)](https://github.com/adhirajpandey/ranger/actions/workflows/ci.yml)
 
-The two hosts are:
+Ranger moves a Docker Compose service to a second host when the host serving it
+fails, then moves it back once the first host has been healthy for ten minutes.
+It is built for self-hosted side projects that run behind Cloudflare Tunnels,
+and it runs entirely on Cloudflare's free plan. Ranger calls each protected
+Compose service a workload.
 
-- `black-box`, an arm64 machine.
-- `white-box`, an amd64 machine.
-
-Each host already has Docker and its own Cloudflare Tunnel. A workload normally
-runs on its preferred host. If that host fails, the controller starts the same
-workload on the other host, waits for it to answer, and changes the workload's
-Cloudflare DNS record to the other tunnel.
-
-This is active/passive failover for small, stateless services. It is not a
-general workload migration system and it does not put a Worker in the request
-path.
-
-## Why we are building it
-
-Today, a host failure makes the services on that host unavailable until someone
-starts them elsewhere and changes their traffic route. The two hosts are
-already available, but there is no small controller that can make that change
-without manual work.
-
-The system should handle the routine part of a host failure while leaving data
-and application ownership with the existing repositories. The first version
-therefore accepts only workloads that can run on either host and do not depend
-on local mutable data.
-
-## The first workload
-
-The pilot is Infinite-Memes:
-
-| Setting | Value |
-| --- | --- |
-| Preferred host | `white-box` |
-| Fallback host | `black-box` |
-| Hostname | `memes.adhirajpandey.tech` |
-| Port | `6704` |
-| Readiness path | `/` |
-| Accepted HTTP statuses | `[200]` |
-
-The agent probes the existing homepage. No dedicated application endpoint or
-JSON response is required. The homepage calls the external meme API, so an
-upstream outage can fail readiness on both hosts. The agent timeout bounds its
-wait, but does not cancel work inside the application. Configure a more reliable
-existing URL later if needed.
-
-Every enrolled workload declares the same kind of information:
-
-```yaml
-name: example-app
-preferred_node: black-box
-fallback_node: white-box
-hostname: example.example.com
-port: 3000
-readiness_path: /
-expected_status: [200]
-overlap_safe: true
-zone_id: <cloudflare-zone-id>
-record_id: <cloudflare-dns-record-id>
-```
-
-`readiness_path` defaults to `/` and `expected_status` to `[200]`. Both the agent
-and controller must use the same policy. Existing endpoints such as `/healthz`
-can be configured without requiring a particular response body. Redirects are
-not followed; their status is accepted only when explicitly configured.
-Unknown configuration keys are rejected.
-
-The record ID is part of the configuration. The controller uses that ID for
-every DNS read and update. It never searches for a record by hostname during a
-failover.
-
-## How traffic moves
-
-Each tunnel has a static route for every enrolled hostname. The controller does
-not rewrite tunnel configuration.
+Each host runs its own tunnel. A workload's public hostname is a proxied DNS
+CNAME that points at one of the two tunnels. Ranger fails over by starting the
+workload on the other host, waiting until it answers, and changing that one DNS
+record:
 
 ```text
-Normal:
-  app.example.com
-    -> DNS CNAME for tunnel-black
-    -> Cloudflare Tunnel on black-box
-    -> local workload
+Normal                               After failover
 
-Failover:
-  app.example.com
-    -> DNS CNAME for tunnel-white
-    -> Cloudflare Tunnel on white-box
-    -> local workload
+app.example.com                      app.example.com
+  -> CNAME to tunnel A                 -> CNAME to tunnel B
+  -> cloudflared on host A             -> cloudflared on host B
+  -> the workload on host A            -> the workload on host B
 ```
 
-The public request goes directly through Cloudflare to the selected tunnel. The
-Worker only runs the controller and its status endpoint. It does not proxy
-application requests or decide where each request goes.
+The controller is a Python Cloudflare Worker with one Durable Object. It runs
+outside both hosts, so it survives either of them failing. It is not in the
+request path: visitors reach the tunnel directly, and the Worker only runs the
+checks and a status endpoint.
 
-## The controller
+## Why it exists
 
-The controller is a Python Cloudflare Worker with one named Durable Object. The
-Durable Object stores the state needed to recover after a controller restart:
+Two small servers at home can run the same apps, but a host failure still
+means downtime until someone notices, starts the app on the other machine, and
+repoints DNS. That can take hours if it happens at night. Ranger does that
+routine part without a person. With the default timings, DNS moves about three
+to four minutes after a workload fails.
 
-- node health and consecutive failure counts;
-- preferred-node recovery time;
-- desired and observed workload placement;
-- the current transition phase;
-- DNS target, last completed cycle, and errors.
+It deliberately stays small. Ranger handles stateless workloads that are safe
+to run on both hosts for a short time. Kubernetes, a load balancer, or a
+replicated database would each cost more to run than the apps they protect.
 
-A Worker cron trigger runs one reconciliation cycle every minute. A node is
-marked unhealthy after two consecutive failed checks. The interval, timeout,
-failure count, recovery period, and drain period are configuration values. The
-cron schedule is generated from the interval.
+## What it guarantees
 
-A Durable Object must run at most one reconciliation cycle at a time. Each cycle
-observes and continues persisted transition state instead of starting a second
-transition. The public controller API contains only an authenticated,
-read-only `GET /status` endpoint. It returns HTTP 503 when cycles stall, so an
-ordinary uptime monitor can watch the controller. Each failover step is written
-to the Worker logs as a JSON event.
+- DNS changes only after the replacement is running and has passed two
+  consecutive readiness checks.
+- If the replacement fails to start or never becomes ready, DNS stays unchanged.
+- If both hosts are unhealthy, DNS stays unchanged.
+- If the DNS record points anywhere other than the two configured tunnels, or
+  is not a proxied CNAME for the configured hostname, Ranger reports it and
+  leaves the record alone.
+- The old copy is stopped only after DNS reads back the new target, the public
+  hostname returns an accepted status, and a one-minute drain has passed.
+- Ranger reads and writes DNS records only by their configured zone and record
+  IDs. It never searches for records by name.
 
-The Cloudflare API token is stored as a Worker secret. It has only DNS read and
-DNS edit permissions for the target zone. It is never committed to this
-repository.
+It does not guarantee that only one copy runs. If the old host is unreachable
+after a failover, Ranger cannot stop its copy, so both may run until the old
+host returns. Ranger therefore refuses any workload that is not marked
+`overlap_safe`. It does not move data, replicate databases, or preserve
+in-flight requests.
 
-## The node agents
+## How it is built
 
-Each host runs a small Python agent as a systemd service. The agent talks to the
-local Docker Compose installation and accepts only workload names from its local
-allowlist.
+| Path | What it is |
+| --- | --- |
+| `src/entry.py` | Worker and Durable Object entrypoints: cron trigger, `GET /status`, HTTP transport |
+| `src/ranger/controller.py` | The reconciliation cycle, independent of the Workers runtime |
+| `src/ranger/agent.py` | The node agent: an authenticated HTTP API over Docker Compose |
+| `src/ranger/config.py` | Validation for the controller and agent configurations |
+| `src/ranger/cloudflare.py` | Adapters for the agents, the DNS API, and the public probe |
+| `scripts/configure-worker.py` | Renders the Wrangler configuration from a cluster configuration |
+| `deploy/ranger-agent@.service` | systemd unit for the agent |
+| `examples/` | Example cluster and agent configurations |
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/health` | Report agent identity and Docker availability |
-| `GET` | `/workloads/:name/health` | Report container and HTTP readiness |
-| `POST` | `/workloads/:name/start` | Start an approved Compose service |
-| `POST` | `/workloads/:name/stop` | Stop an approved Compose service |
+The agent uses only the Python standard library. It accepts start, stop, and
+health requests for an allowlist of Compose services, and nothing else. The
+controller reaches the agents through Workers VPC services over the existing
+tunnels, so agents listen only on loopback and have no public hostname.
 
-Start and stop are idempotent. The agent serializes operations for one
-workload, bounds the Compose command, and checks Docker state afterward. It has
-no operation IDs, workload generations, or persistent operation journal. Docker
-state remains the source of truth if the agent restarts.
+## Field testing
 
-The controller reaches agents through authenticated Workers VPC Service
-bindings over the existing tunnels. Agent management ports bind to loopback on
-the hosts. No public agent hostname is created.
+A pilot ran Ranger in September 2026 on two hosts with different CPU
+architectures, an arm64 Raspberry Pi and an amd64 laptop, protecting a small
+stateless web app. In a drill that stopped the app on the preferred host, the
+controller started the replacement 63 seconds after the stop and switched DNS
+13 seconds later. It then verified the public hostname, drained, stopped the
+old copy, and failed back once the preferred host had been stable for the
+configured period.
 
-## Failover
+The pilot used the earlier 20-second check interval. The current one-minute
+cron has not yet run a drill, and neither have host-shutdown or network-loss
+failures.
 
-With the workload serving from its current host, the controller does this:
+## Develop
 
-1. Count failed node or workload checks until the failure threshold is reached.
-2. Confirm that the other node and Docker are healthy.
-3. Ask the other node's agent to start the approved workload.
-4. Wait for the container and its readiness endpoint to pass two consecutive
-   checks.
-5. Update the configured Cloudflare DNS record by record ID.
-6. Read the record back and probe the public hostname. The response must have
-   an accepted HTTP status. This verifies availability, not which host answered.
-7. Keep the old copy for a one-minute drain period, then stop it when the old
-   node is reachable.
+You need [uv](https://docs.astral.sh/uv/) and Node.js 22.
 
-The controller never changes DNS before the replacement is running and ready.
-If replacement startup or readiness fails, DNS stays unchanged. If both nodes
-are unhealthy, DNS stays unchanged. If the DNS record already points somewhere
-outside the two configured tunnels, the controller reports the conflict and
-leaves it alone.
+```sh
+uv sync --locked
+npm ci
+uv run ruff check src tests scripts
+uv run ruff format --check src tests scripts
+uv run pytest
+```
 
-If the old node cannot be reached after a successful cutover, the new copy keeps
-serving and cleanup remains pending. This is why v1 allows temporary overlap.
-The system cannot prove that an unreachable host stopped running its old copy.
+The Docker Compose integration test is opt-in. It starts a container from
+`tests/fixture/compose.yaml` on loopback port 16740 and removes it afterwards:
 
-## Failback
+```sh
+RUN_DOCKER_TESTS=1 uv run pytest tests/test_agent.py
+```
 
-When the preferred host returns, the controller marks it recovering first. It
-must remain reachable and healthy for ten continuous minutes. The controller
-then starts and checks the preferred copy, changes the DNS record back, verifies
-public traffic, waits for the same drain period, and stops the fallback copy.
+To check that the Worker still packages, without deploying it:
 
-A brief recovery does not trigger failback. A failed recovery attempt leaves the
-working fallback route in place.
+```sh
+uv run pywrangler deploy --dry-run
+```
 
-## Images and deployment
+CI runs all of these on every pull request.
 
-The two hosts use different CPU architectures. An enrolled workload must have
-compatible arm64 and amd64 images built before a failover occurs.
+## Documentation
 
-The replacement host may use a preloaded image or pull an immutable image from
-an available registry. It must never build the image during failover. The
-controller reports a start failure and leaves DNS unchanged if the image cannot
-be obtained.
+- [How Ranger works](docs/architecture.md) explains the design, the failover
+  cycle, the timing, and the limits.
+- [Operate Ranger](docs/operations.md) covers installing the agents, deploying
+  the controller, running drills, and rolling back.
+- [Reference](docs/reference.md) lists every configuration key, the agent API,
+  the status fields, and the log events.
 
-The application repository owns application code, health endpoints, and image
-definitions. Shed owns the host-specific Compose files and tunnel deployment.
-This repository owns the Worker, Durable Object, agents, protocol, tests, and
-rollout notes.
+## Roadmap
 
-## What v1 does not cover
+- Notifications on failover, failback, and stalled transitions.
 
-The first version does not solve:
+## License
 
-- Postgres replication or database failover;
-- SQLite or shared filesystem synchronization;
-- Immich or media-library replication;
-- Kubernetes, Nomad, Docker Swarm, or HAProxy;
-- floating IPs or multi-node consensus;
-- resource-based scheduling or active-active traffic;
-- arbitrary migration of workloads with local state;
-- strict single-owner guarantees during a network partition.
-
-An application that must never run twice needs a fencing mechanism. This design
-does not have one, so such an application cannot be enrolled in v1.
-
-## What is implemented
-
-The repository contains the controller, agent, Cloudflare adapter, systemd unit,
-configuration examples, and rollout documentation. Infinite-Memes has an HTTP
-image smoke check. Shed contains the two host deployment examples and the
-observed Cloudflare zone and record IDs.
-
-The local checks cover agent convergence and authentication, failover readiness
-and DNS safety, both nodes being unhealthy, delayed failback, and controller
-restart during a transition. They include a disposable Compose test. The
-verification record distinguishes the current homepage image smoke check from
-historical arm64 and amd64 checks of the former health endpoint.
-
-Public probe paths require a Cloudflare cache bypass. Request no-cache headers
-and unique query strings alone do not guarantee an origin response.
-
-The previous deployment completed an application-only failover drill on
-24 September 2026. It was retired on 26 September during the Ranger rename.
-Ranger is currently undeployed. Infinite-Memes runs independently on white-box.
-See the [retirement record](docs/rename-2026-09-26.md),
-[rollout procedure](docs/operations.md), and
-[historical verification record](docs/verification.md).
+[MIT](LICENSE)

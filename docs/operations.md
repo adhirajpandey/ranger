@@ -1,157 +1,224 @@
-# Prepare and operate the pilot
+# Operate Ranger
 
-Use this procedure for a fresh Ranger deployment. The previous controller,
-Durable Object state, and VPC services were deleted during the rename.
-Start with new credentials and service IDs. See the
-[retirement record](rename-2026-09-26.md) for the current state.
+These guides set up Ranger on two hosts, deploy the controller, watch it, test
+a failover, and remove it again. The [reference](reference.md) lists every key
+and field that the steps mention.
 
-Ranger is intentionally undeployed. Infinite-Memes currently uses its original
-standalone Compose definition on white-box with `restart: unless-stopped`.
-Deployment and live drills belong to a separate, explicitly requested task.
+## Before you start
 
-## Check the code
+You need:
 
-Run these commands from this repository:
+- Two Linux hosts with Docker Engine and the Compose plugin.
+- A Cloudflare Tunnel on each host, run by `cloudflared` 2025.7.0 or later with
+  host networking. Each tunnel must belong to one host only.
+- A Cloudflare account on the free plan or higher, with the workload's zone.
+- [uv](https://docs.astral.sh/uv/) on both hosts.
+- A checkout of this repository on the machine you deploy from, with uv and
+  Node.js 22.
 
-```sh
-uv sync --locked
-npm ci
-uv run ruff check src tests scripts
-uv run ruff format --check src tests scripts
-uv run pytest -q
-RUN_DOCKER_TESTS=1 uv run pytest tests/test_agent.py -q
-uv run pywrangler deploy --dry-run
-```
+Workers VPC is in beta. If your account cannot create VPC services, stop here.
+Do not expose an agent publicly to work around it.
 
-The Docker test owns only its generated Compose project and loopback port 16740.
-It removes its containers afterward. Packaging does not deploy.
-The locked development environment includes a recent `uv` for Workers tooling.
+## Prepare a workload
 
-## Prepare images and hosts
+Do this once for each workload, on both hosts.
 
-1. Build Infinite-Memes from the same committed revision on both architectures.
-   Tag images with that revision; rebuild old health-endpoint candidate images.
-2. Run `python3 scripts/smoke-image.py IMAGE` in each application checkout.
-3. Preload images or make immutable registry references available to both hosts.
-   Authenticate the agent's OS user to a private registry if needed.
-4. Copy each Shed `ranger.env.example` to `ranger.env`. Set `RANGER_IMAGE`
-   to the prebuilt image. Never add build instructions to `compose.ranger.yml`.
-5. Validate each standalone Compose file:
+1. Build the workload's image for both hosts' CPU architectures, or push a
+   multi-architecture image to a registry. Ranger never builds images during a
+   failover.
+2. Write a Compose file that runs the image. Bind the published port to
+   `127.0.0.1` and set `restart: "no"`. Without that, Docker starts the standby
+   copy on every boot, and two copies run when nobody asked for them.
+3. Check that the Compose file is valid:
 
    ```sh
-   docker compose -f compose.ranger.yml --env-file ranger.env -p infinite-memes config --quiet
+   docker compose -f /srv/example-app/compose.yaml -p example-app config --quiet
    ```
 
-6. As the Docker user on each host, install the agent. uv supplies Python 3.12
-   or newer if the host lacks it; the agent has no third-party dependencies.
+4. In both tunnels, route the workload's hostname to
+   `http://127.0.0.1:PORT`. Keep the tunnels' other routes.
+5. Make the hostname's DNS record a proxied CNAME to the preferred host's
+   tunnel, `<tunnel-id>.cfargotunnel.com`. Note the zone ID and the record ID.
+   Some dashboard actions on tunnel routes rewrite this record, so recheck it
+   after changing a route.
+6. Add a Cache Rule that bypasses the cache for the hostname's readiness path.
+   Without it, the public readiness check can pass on a cached response.
+7. Start the workload on the preferred host only.
+
+## Install the agent
+
+Do this on both hosts.
+
+1. As the user who runs the agent, install it. That user must be in the
+   `docker` group. uv installs Python 3.12 or newer if the host lacks it.
 
    ```sh
    uv tool install git+https://github.com/adhirajpandey/ranger
    ```
 
-   Upgrade later with `uv tool upgrade ranger`, then restart the unit.
-7. Copy the host's agent configuration to `/etc/ranger-agent/agent.json`.
-   [`examples/agent.json`](../examples/agent.json) shows the format.
-8. Generate one random token of at least 32 characters, shared by both agents.
-   Put `AGENT_TOKEN=...` in `/etc/ranger-agent/agent.env`, readable only by
-   root. Keep Compose files and agent configuration writable only by trusted
-   operators. Docker access grants control of the host.
-9. Install [`deploy/ranger-agent@.service`](../deploy/ranger-agent@.service) in
-   `/etc/systemd/system`. Run `systemctl daemon-reload`, then
-   `systemctl enable --now ranger-agent@USER`, where `USER` is the Docker user
-   from step 6.
-10. Verify authenticated local `/health` and `/workloads/NAME/health` requests. Confirm that
-    the agent listens only on loopback port 6720.
-
-The standalone failover Compose file replaces the legacy deployment only during
-enrollment. Both files use the existing `infinite-memes` project and container
-name. Do not run both deployment procedures independently after enrollment.
-
-## Prepare Cloudflare
-
-1. Verify each existing tunnel belongs exclusively to its intended node.
-   Keep cloudflared using host networking, version 2025.7.0 or later, and QUIC.
-2. Add `memes.adhirajpandey.tech -> http://127.0.0.1:6704` to both tunnels as a
-   static mapping. Preserve existing mappings and the final fallback.
-   Avoid dashboard actions that silently change the current DNS target.
-3. Bypass caching for the configured probe path, initially `/`. Verify the public
-   response is not cached. Probe query strings and request headers alone are
-   insufficient. Use matching `readiness_path` and `expected_status` on the
-   controller and both agents.
-4. Create `ranger-agent-black-box` and `ranger-agent-white-box` as HTTP VPC
-   services targeting `127.0.0.1:6720` through their respective tunnels. Use Shed's `vpc-services.example.json` as the configuration reference.
-   Verify this private route end to end before activation. Do not add public
-   agent hostnames or broaden network exposure to bypass a routing failure.
-5. Copy `../shed/ranger/cluster.example.json` to
-   `../shed/ranger/cluster.local.json`. Fill both VPC Service IDs. Recheck the zone ID, record ID, and tunnel targets against
-   Cloudflare. IDs are provisioned once, never discovered during failover.
-6. Create a runtime token limited to DNS Read and DNS Edit on the single
-   `adhirajpandey.tech` zone. Cloudflare does not scope this token to one record.
-   The controller's configured record ID limits which record it accesses.
-   Use a separate operator credential for Worker and VPC provisioning.
-
-Workers VPC is beta. Resolve missing account permissions or unsupported private
-routing before enrollment. These are not reasons to expose an agent.
-
-## Enroll and initialize
-
-1. Verify the new image on white-box and recreate only Infinite-Memes with
-   `compose.ranger.yml`. Confirm local and public `/` return HTTP 200 and DNS points to
-   white-box. A public response does not prove serving-node identity.
-   Keep the black-box copy stopped.
-2. From this repository, render the Worker configuration. The cron schedule is
-   generated from `check_interval`:
+2. Write the agent configuration to `/etc/ranger-agent/agent.json`. Start from
+   [`examples/agent.json`](../examples/agent.json). Set `node` to this host's
+   node name, and use the same `readiness_path` and `expected_status` as the
+   cluster configuration.
+3. Generate one token for both agents. Use the same value on the second host.
 
    ```sh
-   PYTHONPATH=src uv run python scripts/configure-worker.py ../shed/ranger/cluster.local.json
+   openssl rand -hex 32
    ```
 
-3. Set Worker secrets `DNS_API_TOKEN`, `STATUS_TOKEN`, and `AGENT_TOKEN` using
-   `uv run pywrangler secret put NAME --config wrangler.local.jsonc`.
-   `AGENT_TOKEN` matches the agents' token. Use at least 32 random characters
-   for `STATUS_TOKEN`. Never commit secrets or shell transcripts.
-4. Deploy Worker `ranger` with `uv run pywrangler deploy --config wrangler.local.jsonc`.
-   The fresh `v1` migration creates the `Cluster` namespace.
-   Both entrypoints select singleton `ranger-v1`. The cron trigger calls an
-   internal Durable Object cycle route. There is no public way to run a cycle.
-5. Query authenticated `GET /status`. Wait for `last_cycle` and verify both
-   observations and the white-box DNS target. Confirm private probes work.
-6. Point an uptime monitor at `GET /status` with the status token. HTTP 503
-   means no cycle has completed for three check intervals.
+4. Write the token to `/etc/ranger-agent/agent.env`, readable only by root:
 
-The status endpoint never changes controller state. Keep the Durable Object
-binding, class, migration history, and singleton name unchanged across ordinary
-deployments. Worker events appear in Workers Logs. Agent logs are available with
-`journalctl -u ranger-agent`.
+   ```text
+   AGENT_TOKEN=the-token-from-step-3
+   ```
 
-## Run live acceptance
+5. Copy [`deploy/ranger-agent@.service`](../deploy/ranger-agent@.service) to
+   `/etc/systemd/system/`. Then enable the agent for the user from step 1:
 
-1. Record the normal DNS target and both agent observations.
-2. Stop only the preferred application as a controlled failure. Observe the
-   threshold, replacement readiness, DNS write, and accepted public HTTP status.
-3. Record the time from first failed request to sustained public recovery.
-   DNS API acknowledgement alone does not establish cutover time.
-4. Verify the old copy stops after the one-minute drain and the fallback serves.
-5. Verify failback waits for ten minutes of stability before starting and
-   validating the preferred copy. Confirm DNS points to white-box and public
-   HTTP readiness passes.
-6. Schedule host shutdown and network-loss drills separately. Avoid stopping
-   Docker or cloudflared during application-only acceptance.
+   ```sh
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now ranger-agent@USER
+   ```
 
-Keep live results pending until observed. Do not promise an outage target before
-measuring the real Cloudflare route change.
+6. Check that the agent answers on loopback:
+
+   ```sh
+   curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:6720/health
+   curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:6720/workloads/example-app/health
+   ```
+
+   The first request returns `"docker": true`. The second returns the
+   workload's `state`: `ready` on the preferred host and `stopped` on the other.
+
+Keep the Compose files and `/etc/ranger-agent/` writable only by trusted
+users. Anyone who can change them can run containers through Docker, which is
+equivalent to root on the host.
+
+## Deploy the controller
+
+1. In Cloudflare, create one Workers VPC service for each host:
+
+   | Setting | Value |
+   | --- | --- |
+   | Type | HTTP |
+   | Host | `127.0.0.1` |
+   | HTTP port | `6720` |
+   | Network | The host's tunnel |
+
+2. Create an API token with DNS Read and DNS Edit on the workloads' zone. A
+   zone-wide token can edit any record in the zone. Ranger limits itself to
+   the configured record IDs.
+3. Copy [`examples/cluster.json`](../examples/cluster.json) to a file outside
+   the repository. Fill in the tunnel targets, the VPC service IDs, and each
+   workload's zone ID and record ID.
+4. Render the Wrangler configuration:
+
+   ```sh
+   PYTHONPATH=src uv run python scripts/configure-worker.py ~/ranger/cluster.json
+   ```
+
+   The renderer writes `wrangler.local.jsonc`. It stops with an error if the
+   configuration is invalid or a VPC service ID is still a placeholder.
+5. Deploy the Worker:
+
+   ```sh
+   uv run pywrangler deploy --config wrangler.local.jsonc
+   ```
+
+6. Set the three secrets. Enter each value when prompted.
+
+   ```sh
+   uv run pywrangler secret put DNS_API_TOKEN --config wrangler.local.jsonc
+   uv run pywrangler secret put AGENT_TOKEN --config wrangler.local.jsonc
+   uv run pywrangler secret put STATUS_TOKEN --config wrangler.local.jsonc
+   ```
+
+   `AGENT_TOKEN` is the agents' token. Generate a separate `STATUS_TOKEN` with
+   `openssl rand -hex 32`. Until all three secrets exist, cycles fail and the
+   Worker logs errors.
+
+7. Wait two minutes, then read the status:
+
+   ```sh
+   curl -H "Authorization: Bearer $STATUS_TOKEN" https://ranger.SUBDOMAIN.workers.dev/status
+   ```
+
+   `SUBDOMAIN` is your account's workers.dev subdomain. Expect HTTP 200. Both
+   nodes are `healthy`, each workload's `current` is its preferred node, and
+   `error` is `null`.
+
+To change the configuration later, edit the cluster file, then repeat steps 4
+and 5. Do not rename the `Cluster` class, the `CLUSTER` binding, or the
+`ranger-v1` object name. Any of those changes starts the controller with empty
+state.
+
+## Watch the controller
+
+- Point an uptime monitor at `GET /status` with the status token. HTTP 503
+  means no cycle has finished for three check intervals.
+- Read the controller's events in Workers Logs in the Cloudflare dashboard. The
+  [reference](reference.md#log-events) lists them.
+- Read an agent's log on its host:
+
+  ```sh
+  journalctl -u ranger-agent@USER
+  ```
+
+## Upgrade
+
+To upgrade an agent, run this on its host:
+
+```sh
+uv tool upgrade ranger
+sudo systemctl restart ranger-agent@USER
+```
+
+To upgrade the controller, pull the repository, then render and deploy as in
+steps 4 and 5 of [Deploy the controller](#deploy-the-controller). The
+controller keeps its state across deployments.
+
+## Run a failover drill
+
+Run the drill when a few minutes of downtime are acceptable.
+
+1. Read the status and note each workload's `current` node.
+2. On the preferred host, stop the workload:
+
+   ```sh
+   docker compose -f /srv/example-app/compose.yaml -p example-app stop
+   ```
+
+3. Watch the events. Expect `failover_started` one to two minutes after the
+   stop, then `start_requested`, `dns_switched`, `public_check_passed`,
+   `stop_requested`, and `transition_completed`.
+4. Request the public hostname every few seconds throughout. Note the first
+   failed request and the start of sustained success. Those two times give the
+   outage length. The time of the DNS change alone does not.
+5. Leave the preferred copy stopped. A stopped copy on a healthy host counts as
+   recoverable, so about ten minutes after the stop, the controller starts it,
+   switches DNS back, and stops the fallback copy.
+
+Test a host shutdown and a network loss as separate drills, one at a time.
 
 ## Roll back
 
-1. Revoke the controller's dedicated DNS token and stop both agent units to
-   prevent new controller mutations. Leave the current application running.
-2. Save status and determine which copies are actually healthy.
-3. Manually start and verify the intended serving copy with approved Compose
-   configuration. Restore its DNS target using an operator credential.
-4. Verify public readiness and wait one minute before stopping another copy.
-5. Keep controller state for diagnosis. For permanent removal, delete the
-   Worker after recording status and confirming manual service ownership.
+To take Ranger out of control of a workload:
 
-To return to the legacy deployment, stop the enrolled service and recreate it
-from Shed's original Compose file. This restores its original restart policy.
-Never delete application volumes as part of rollback.
+1. Stop both agents, so that the controller can no longer start or stop
+   anything:
+
+   ```sh
+   sudo systemctl disable --now ranger-agent@USER
+   ```
+
+2. Read the last status to see which copies are running and where DNS points.
+3. Start the copy you want to keep, and check that it answers locally.
+4. If DNS does not point at that host's tunnel, change the record in the
+   Cloudflare dashboard. Check that the public hostname answers.
+5. Wait one minute, then stop the other copy.
+6. Set the workload's Compose restart policy back to what it was before
+   enrollment, if you changed it.
+
+To remove Ranger entirely, delete the Worker, the VPC services, and the DNS API
+token. Deleting the Worker deletes its stored state, so save the last status
+first if you need it.
