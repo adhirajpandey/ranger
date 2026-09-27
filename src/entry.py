@@ -2,6 +2,7 @@
 
 import hmac
 import json
+import time
 from urllib.parse import urlsplit
 
 from js import AbortSignal, Object
@@ -12,10 +13,12 @@ from workers import DurableObject, Request, Response, WorkerEntrypoint
 
 from ranger.cloudflare import CloudflareIO
 from ranger.config import validate_cluster_config
-from ranger.controller import Reconciler
+from ranger.controller import Reconciler, describe, event
 
 # The single controller instance. Renaming it starts a new, empty controller state.
 CLUSTER_NAME = "ranger-v1"
+# Status reports unavailable after this many missed check intervals.
+STALE_INTERVALS = 3
 
 
 class DurableStore:
@@ -76,11 +79,16 @@ class Cluster(DurableObject):
             try:
                 await self.reconciler.cycle(json.loads(await request.text())["now"])
             except Exception as exc:
-                print(json.dumps({"event": "cycle_failed", "error": type(exc).__name__}))
+                event("cycle_failed", error=describe(exc)[:200])
                 return Response("cycle failed", status=500)
             return Response("cycle complete")
+        state = await self.store.load() or {"status": "not initialized"}
+        # A stalled controller answers 503, so a plain uptime check notices it.
+        stale_after = STALE_INTERVALS * self.config["policy"]["check_interval"]
+        fresh = time.time() - state.get("last_cycle", 0) <= stale_after
         return Response(
-            json.dumps(await self.store.load() or {"status": "not initialized"}),
+            json.dumps(state),
+            status=200 if fresh else 503,
             headers={"Content-Type": "application/json", "Cache-Control": "no-store"},
         )
 
@@ -89,11 +97,12 @@ class Default(WorkerEntrypoint):
     async def fetch(self, request):
         if request.method != "GET" or urlsplit(request.url).path != "/status":
             return Response("not found", status=404)
-        token = str(self.env.STATUS_TOKEN)
+        token = str(getattr(self.env, "STATUS_TOKEN", ""))
+        if len(token) < 32:
+            event("status_token_invalid")
+            return Response("status token is not configured", status=500)
         provided = request.headers.get("Authorization") or ""
-        if len(token) < 32 or not hmac.compare_digest(
-            provided.encode(), f"Bearer {token}".encode()
-        ):
+        if not hmac.compare_digest(provided.encode(), f"Bearer {token}".encode()):
             return Response("unauthorized", status=401)
         return await self.env.CLUSTER.getByName(CLUSTER_NAME).fetch(request)
 
