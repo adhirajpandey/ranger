@@ -46,14 +46,33 @@ redirect or error status can pass readiness.
 
 Status includes `nodes`, `workloads`, `last_cycle`, and
 `last_successful_cycle`. The latter advances only when workloads report no error.
+`GET /status` returns HTTP 503 before the first cycle and when `last_cycle` is
+more than three check intervals old, so an uptime monitor can detect a stalled
+controller. A status token shorter than 32 characters returns HTTP 500.
+
 Each workload includes `current`, `desired`, `observations`, `dns_target`,
-`transition`, and `error`. `current` is DNS-observed placement. Both actual
-process observations remain visible because overlap is permitted.
+`transition`, `backoff`, and `error`. `current` is DNS-observed placement. Both
+actual process observations remain visible because overlap is permitted.
+`error` describes the latest cycle only and clears when its cause does.
+Error messages are sanitized and never contain tokens.
 
 Transition phases are `starting`, `switching`, `verifying`, and `draining`.
 Intent is persisted before mutations. Each cycle counts at most one failed
 check and one readiness success.
-Failed startup backs off for the recovery stability period.
+Failed startup backs off for the recovery stability period. `backoff` then holds
+`until` and `reason`, and `error` reports the pause.
+
+## Logs
+
+The Worker writes one JSON line per event: `node_status`, `failover_started`,
+`failback_started`, `start_requested`, `dns_switched`, `public_check_passed`,
+`stop_requested`, `transition_completed`, `transition_abandoned`,
+`workload_error`, `workload_error_cleared`, `cycle_failed`, and
+`status_token_invalid`. A persisting workload error is logged once.
+
+Agents log actions, failures, and rejected requests to standard error, which
+systemd writes to the journal. Docker's error output stays in the journal; the
+controller receives only the exit code.
 
 An unreachable previous node leaves cleanup pending while the new copy serves.
 Returning nodes do not gain traffic merely because their Docker processes start.
