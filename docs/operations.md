@@ -195,8 +195,8 @@ Run the drill when a few minutes of downtime are acceptable.
    failed request and the start of sustained success. Those two times give the
    outage length. The time of the DNS change alone does not.
 5. Leave the preferred copy stopped. A stopped copy on a healthy host counts as
-   recoverable, so about ten minutes after the stop, the controller starts it,
-   switches DNS back, and stops the fallback copy.
+   recoverable, so ten minutes after DNS switched away, the controller starts
+   it, switches DNS back, and stops the fallback copy.
 
 Test a host shutdown and a network loss as separate drills, one at a time.
 
