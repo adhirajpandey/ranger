@@ -8,7 +8,7 @@ async def test_dns_uses_only_configured_record_id():
         calls.append((url, kwargs))
         return {"success": True, "result": {"content": "target"}}
 
-    io = CloudflareIO({}, request, "token", {})
+    io = CloudflareIO({}, request, "token", "agent-token")
     spec = {"zone_id": "zone-id", "record_id": "record-id", "hostname": "unused.example.com"}
     await io.dns(spec)
     await io.set_dns(spec, "target")
@@ -26,7 +26,7 @@ async def test_public_probe_requests_status_only():
         calls.append((url, kwargs))
         return {"http_status": 401}
 
-    io = CloudflareIO({}, request, "token", {})
+    io = CloudflareIO({}, request, "token", "agent-token")
     spec = {"hostname": "example.com", "readiness_path": "/", "expected_status": [401]}
     assert await io.public(spec) == {"http_status": 401}
     assert calls[0][0].startswith("https://example.com/?failover_probe=")

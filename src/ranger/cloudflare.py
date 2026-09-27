@@ -4,15 +4,15 @@ import time
 
 
 class CloudflareIO:
-    def __init__(self, config, request, dns_token, agent_tokens):
+    def __init__(self, config, request, dns_token, agent_token):
         self.config, self.request = config, request
-        self.dns_token, self.agent_tokens = dns_token, agent_tokens
+        self.dns_token, self.agent_token = dns_token, agent_token
 
     async def agent(self, node, path, method="GET"):
         return await self.request(
             f"http://agent.internal{path}",
             method=method,
-            headers={"Authorization": f"Bearer {self.agent_tokens[node]}"},
+            headers={"Authorization": f"Bearer {self.agent_token}"},
             binding=self.config["nodes"][node]["agent_binding"],
         )
 
