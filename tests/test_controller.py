@@ -290,3 +290,16 @@ async def test_unexpected_dns_record_is_left_untouched(record):
     assert c.io.changes == []
     assert not c.io.running["black-box"]
     assert c.workload["error"]
+
+
+async def test_failback_waits_for_stability_after_the_switch():
+    c = Cluster()
+    await c.tick(20)  # Long before the failure, the preferred copy is ready.
+    c.io.running["white-box"] = False  # A stopped copy stays recoverable.
+    await c.tick(4)
+    assert c.io.changes == ["black-box"]
+    await c.tick(10)
+    assert c.io.changes == ["black-box"]
+    assert not c.io.running["white-box"]
+    await c.tick()
+    assert c.io.running["white-box"]  # Failback starts ten minutes after the switch.

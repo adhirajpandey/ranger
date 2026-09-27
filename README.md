@@ -79,17 +79,26 @@ tunnels, so agents listen only on loopback and have no public hostname.
 
 ## Field testing
 
-A pilot ran Ranger in September 2026 on two hosts with different CPU
-architectures, an arm64 Raspberry Pi and an amd64 laptop, protecting a small
-stateless web app. In a drill that stopped the app on the preferred host, the
-controller started the replacement 63 seconds after the stop and switched DNS
-13 seconds later. It then verified the public hostname, drained, stopped the
-old copy, and failed back once the preferred host had been stable for the
-configured period.
+Ranger runs in production on two hosts with different CPU architectures, an
+arm64 Raspberry Pi and an amd64 laptop, protecting a small stateless web app.
 
-The pilot used the earlier 20-second check interval. The current one-minute
-cron has not yet run a drill, and neither have host-shutdown or network-loss
-failures.
+In a drill on 28 September 2026, the app on the preferred host was stopped at
+02:41:36. With the default timings, the controller:
+
+| Time | Step |
+| --- | --- |
+| 02:43:23 | Started the replacement after the second failed check |
+| 02:45:23 | Switched DNS after two ready checks |
+| 02:46:08 | First public request succeeded through the new host |
+| 02:47:30 | Last failed request |
+| 02:48:23 | Finished the transition |
+
+Visitors saw errors for about 4.5 minutes, then a mix of successes and errors
+for 1.5 minutes while Cloudflare's edges picked up the DNS change. The failback
+had no failed requests, because both copies ran during the switch. Every Worker
+invocation during the drill finished within the free plan's CPU limit.
+
+Host-shutdown and network-loss drills have not run yet.
 
 ## Develop
 

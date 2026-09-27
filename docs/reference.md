@@ -238,7 +238,7 @@ Each workload has these fields:
 | `dns_target` | Content of the DNS record |
 | `observations` | Latest observation from each node's agent |
 | `failures` | Consecutive failed checks, by node |
-| `preferred_since` | Start of the preferred copy's current stable period, or `null` |
+| `preferred_since` | Start of the preferred copy's current stable period while traffic is on the other node, or `null` |
 | `transition` | The running transition, or `null` |
 | `backoff` | `until` and `reason` after a failed replacement, or `null` |
 | `error` | What went wrong in the latest cycle, or `null` |

@@ -62,8 +62,9 @@ Every minute, the controller:
    `unhealthy`. A host that comes back is `recovering` until it has been
    healthy for ten minutes.
 3. For each workload, works out where DNS points and whether that copy is ready.
-   Two failed checks in a row on the serving host start a failover. Ten
-   minutes of stability on the preferred host start a failback.
+   Two failed checks in a row on the serving host start a failover. A failback
+   starts once the preferred host has been stable for ten minutes while traffic
+   was on the other host.
 4. Advances any transition already in progress. One cycle can pass through
    several phases, but it counts at most one ready check.
 
@@ -130,6 +131,8 @@ rejected before deployment.
   or the check may see a cached response.
 - **In-flight requests.** Connections open to the old host during the switch
   can fail.
+- **DNS propagation.** Cloudflare's edges pick up a CNAME change over a minute
+  or two. If the old copy is already down, some requests fail until they do.
 - **Free-plan headroom.** A Worker invocation on the free plan can make 50
   outgoing requests. A cycle makes 2, plus 3 for each workload, plus up to 4
   more for each workload that switches DNS in that cycle. That allows 16

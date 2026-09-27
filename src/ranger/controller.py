@@ -146,11 +146,12 @@ class Reconciler:
         w["current"] = routed
         preferred = spec["preferred_node"]
         preferred_obs = observations[preferred]
-        # A stopped preferred copy can be started after the stability period.
+        # A stopped preferred copy can be started after the stability period. The period
+        # counts only while traffic is elsewhere, so every failover waits for all of it.
         recoverable = state["nodes"][preferred]["available"] and (
             stopped(preferred_obs) or ready(preferred_obs)
         )
-        if not recoverable:
+        if not recoverable or routed == preferred:
             w["preferred_since"] = None
         elif w["preferred_since"] is None:
             w["preferred_since"] = now
