@@ -34,7 +34,7 @@ def transport(monkeypatch):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     cluster = object.__new__(module.Cluster)
-    cluster.config = {"policy": {"probe_timeout": 5}}
+    cluster.config = {"policy": {"probe_timeout": 5, "check_interval": 60}}
     cluster.entry_module = module
     return cluster, fetch
 
@@ -102,3 +102,69 @@ async def test_cycle_route_reports_failure(transport):
     cluster.reconciler.cycle.assert_awaited_once_with(120.0)
     cluster.reconciler.cycle.side_effect = RuntimeError("unexpected")
     assert (await cluster.fetch(request)).status == 500
+
+
+@pytest.mark.parametrize(
+    "state,age,status",
+    [
+        ({"last_cycle": 1000}, 60, 200),
+        ({"last_cycle": 1000}, 180, 200),
+        ({"last_cycle": 1000}, 181, 503),
+        (None, 0, 503),
+    ],
+)
+async def test_status_is_unavailable_when_cycles_stall(transport, monkeypatch, state, age, status):
+    cluster, _ = transport
+    cluster.store = SimpleNamespace(load=AsyncMock(return_value=state))
+    monkeypatch.setattr(cluster.entry_module.time, "time", lambda: 1000 + age)
+    request = SimpleNamespace(method="GET", url="https://ranger.example/status")
+    response = await cluster.fetch(request)
+    assert response.status == status
+    assert json.loads(response.body) == (state or {"status": "not initialized"})
+
+
+TOKEN = "s" * 32
+
+
+def status_handler(transport, token=TOKEN):
+    cluster, _ = transport
+    stub = SimpleNamespace(fetch=AsyncMock(return_value="cluster response"))
+    handler = object.__new__(cluster.entry_module.Default)
+    handler.env = SimpleNamespace(CLUSTER=SimpleNamespace(getByName=Mock(return_value=stub)))
+    if token is not None:
+        handler.env.STATUS_TOKEN = token
+    return handler, stub
+
+
+def status_request(authorization=f"Bearer {TOKEN}", method="GET", path="/status"):
+    headers = {"Authorization": authorization} if authorization else {}
+    return SimpleNamespace(method=method, url=f"https://ranger.example{path}", headers=headers)
+
+
+@pytest.mark.parametrize(
+    "request_,status",
+    [
+        (status_request(authorization=None), 401),
+        (status_request(authorization="Bearer wrong"), 401),
+        (status_request(method="POST"), 404),
+        (status_request(path="/cycle"), 404),
+    ],
+)
+async def test_status_rejects_other_requests(transport, request_, status):
+    handler, stub = status_handler(transport)
+    assert (await handler.fetch(request_)).status == status
+    stub.fetch.assert_not_awaited()
+
+
+async def test_status_forwards_authenticated_requests(transport):
+    handler, stub = status_handler(transport)
+    request = status_request()
+    assert await handler.fetch(request) == "cluster response"
+    stub.fetch.assert_awaited_once_with(request)
+
+
+@pytest.mark.parametrize("token", [None, "short"])
+async def test_misconfigured_status_token_is_a_server_error(transport, token):
+    handler, stub = status_handler(transport, token)
+    assert (await handler.fetch(status_request(authorization="Bearer short"))).status == 500
+    stub.fetch.assert_not_awaited()

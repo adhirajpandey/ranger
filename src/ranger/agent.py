@@ -3,6 +3,7 @@
 import argparse
 import hmac
 import json
+import logging
 import os
 import subprocess
 import threading
@@ -13,6 +14,8 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from ranger.config import validate_agent_config
+
+log = logging.getLogger("ranger.agent")
 
 
 def load_config(path):
@@ -42,7 +45,14 @@ class Docker:
             check=False,
         )
         if result.returncode:
-            # Docker diagnostics can contain registry credentials or environment values.
+            # Docker diagnostics can contain registry credentials or environment values,
+            # so they stay in the host journal and the controller receives only the code.
+            log.error(
+                "docker %s exited with code %d: %s",
+                " ".join(args),
+                result.returncode,
+                result.stderr.strip()[-2000:],
+            )
             raise RuntimeError(f"docker command exited with code {result.returncode}")
         return result.stdout
 
@@ -136,7 +146,7 @@ class Agent:
                 "node": self.config["node"],
                 "state": "error",
                 "http_status": None,
-                "error": type(exc).__name__,
+                "error": str(exc) or type(exc).__name__,
             }
         with self.guard:
             return {**result, "operation": dict(self.operations[name])}
@@ -155,10 +165,15 @@ class Agent:
                 item = self.config["workloads"][name]
                 observation = self.docker.observe(item, self.config["node"])
                 if (observation["state"] == "stopped") == (action == "start"):
+                    log.info("%s %s", action, name)
                     self.docker.change(item, action)
+                    log.info("%s %s completed", action, name)
+                else:
+                    log.info("%s %s skipped; already in the requested state", action, name)
             except Exception as exc:
+                log.error("%s %s failed: %s", action, name, exc)
                 with self.guard:
-                    self.operations[name]["error"] = type(exc).__name__
+                    self.operations[name]["error"] = str(exc) or type(exc).__name__
             finally:
                 with self.guard:
                     self.operations[name]["pending"] = None
@@ -192,6 +207,7 @@ def handler_for(agent, token):
         def dispatch(self):
             auth = self.headers.get("Authorization", "").encode()
             if not hmac.compare_digest(auth, f"Bearer {token}".encode()):
+                log.warning("rejected unauthenticated %s %s", self.command, self.path[:100])
                 return self.reply(401, {"error": "unauthorized"})
             path = urlsplit(self.path).path
             if self.command == "GET" and path == "/health":
@@ -218,9 +234,19 @@ def main():
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=6720)
     args = parser.parse_args()
-    agent = Agent(load_config(args.config))
+    # systemd adds timestamps when it writes stderr to the journal.
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    config = load_config(args.config)
+    agent = Agent(config)
     server = ThreadingHTTPServer(
         (args.host, args.port), handler_for(agent, os.environ["AGENT_TOKEN"])
+    )
+    log.info(
+        "agent for node %s listening on %s:%d with workloads %s",
+        config["node"],
+        args.host,
+        args.port,
+        ", ".join(config["workloads"]),
     )
     server.serve_forever()
 

@@ -114,8 +114,10 @@ cron schedule is generated from the interval.
 
 A Durable Object must run at most one reconciliation cycle at a time. Each cycle
 observes and continues persisted transition state instead of starting a second
-transition. The public controller API initially contains only an
-authenticated, read-only `GET /status` endpoint.
+transition. The public controller API contains only an authenticated,
+read-only `GET /status` endpoint. It returns HTTP 503 when cycles stall, so an
+ordinary uptime monitor can watch the controller. Each failover step is written
+to the Worker logs as a JSON event.
 
 The Cloudflare API token is stored as a Worker secret. It has only DNS read and
 DNS edit permissions for the target zone. It is never committed to this

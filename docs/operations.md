@@ -109,9 +109,13 @@ routing before enrollment. These are not reasons to expose an agent.
    internal Durable Object cycle route. There is no public way to run a cycle.
 5. Query authenticated `GET /status`. Wait for `last_cycle` and verify both
    observations and the white-box DNS target. Confirm private probes work.
+6. Point an uptime monitor at `GET /status` with the status token. HTTP 503
+   means no cycle has completed for three check intervals.
 
-The status endpoint never changes controller state. Keep the Durable Object binding, class, migration history, and singleton name
-unchanged across ordinary deployments.
+The status endpoint never changes controller state. Keep the Durable Object
+binding, class, migration history, and singleton name unchanged across ordinary
+deployments. Worker events appear in Workers Logs. Agent logs are available with
+`journalctl -u ranger-agent`.
 
 ## Run live acceptance
 
