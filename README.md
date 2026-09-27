@@ -67,7 +67,7 @@ record_id: <cloudflare-dns-record-id>
 and controller must use the same policy. Existing endpoints such as `/healthz`
 can be configured without requiring a particular response body. Redirects are
 not followed; their status is accepted only when explicitly configured.
-Legacy `health_path` configuration is rejected with a migration message.
+Unknown configuration keys are rejected.
 
 The record ID is part of the configuration. The controller uses that ID for
 every DNS read and update. It never searches for a record by hostname during a
@@ -107,13 +107,14 @@ Durable Object stores the state needed to recover after a controller restart:
 - the current transition phase;
 - DNS target, last completed cycle, and errors.
 
-Durable Object alarms trigger reconciliation about every 20 seconds. A node is
-marked unhealthy after three consecutive failed checks. The interval, timeout,
-failure count, recovery period, and drain period are configuration values.
+A Worker cron trigger runs one reconciliation cycle every minute. A node is
+marked unhealthy after two consecutive failed checks. The interval, timeout,
+failure count, recovery period, and drain period are configuration values. The
+cron schedule is generated from the interval.
 
-A Durable Object must run at most one reconciliation cycle at a time. A new
-alarm observes and continues persisted transition state instead of starting a
-second transition. The public controller API initially contains only an
+A Durable Object must run at most one reconciliation cycle at a time. Each cycle
+observes and continues persisted transition state instead of starting a second
+transition. The public controller API initially contains only an
 authenticated, read-only `GET /status` endpoint.
 
 The Cloudflare API token is stored as a Worker secret. It has only DNS read and
@@ -129,7 +130,6 @@ allowlist.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/health` | Report agent identity and Docker availability |
-| `GET` | `/workloads` | Report configured workloads and observations |
 | `GET` | `/workloads/:name/health` | Report container and HTTP readiness |
 | `POST` | `/workloads/:name/start` | Start an approved Compose service |
 | `POST` | `/workloads/:name/stop` | Stop an approved Compose service |
@@ -150,12 +150,12 @@ With the workload serving from its current host, the controller does this:
 1. Count failed node or workload checks until the failure threshold is reached.
 2. Confirm that the other node and Docker are healthy.
 3. Ask the other node's agent to start the approved workload.
-4. Wait for the container and its readiness endpoint to pass two checks, at
-   least five seconds apart.
+4. Wait for the container and its readiness endpoint to pass two consecutive
+   checks.
 5. Update the configured Cloudflare DNS record by record ID.
 6. Read the record back and probe the public hostname. The response must have
    an accepted HTTP status. This verifies availability, not which host answered.
-7. Keep the old copy for a 45-second drain period, then stop it when the old
+7. Keep the old copy for a one-minute drain period, then stop it when the old
    node is reachable.
 
 The controller never changes DNS before the replacement is running and ready.
@@ -171,7 +171,7 @@ The system cannot prove that an unreachable host stopped running its old copy.
 ## Failback
 
 When the preferred host returns, the controller marks it recovering first. It
-must remain reachable and healthy for five continuous minutes. The controller
+must remain reachable and healthy for ten continuous minutes. The controller
 then starts and checks the preferred copy, changes the DNS record back, verifies
 public traffic, waits for the same drain period, and stops the fallback copy.
 

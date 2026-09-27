@@ -47,13 +47,13 @@ The locked development environment includes a recent `uv` for Workers tooling.
    runtime dependencies. Do not replace the host's system Python.
 7. Copy the host's Shed `agent.example.json` to
    `/etc/ranger/agent.json`. Use the existing `adhiraj` Docker user.
-8. Generate a separate random token of at least 32 characters for each agent.
+8. Generate one random token of at least 32 characters, shared by both agents.
    Put `AGENT_TOKEN=...` in `/etc/ranger/agent.env`, readable only by
    root. Keep Compose files and agent configuration writable only by trusted
    operators. Docker access grants control of the host.
 9. Install `deploy/ranger-agent.service` in `/etc/systemd/system`.
    Run `systemctl daemon-reload` and enable and start the unit on each host.
-10. Verify authenticated local `/health` and `/workloads` requests. Confirm that
+10. Verify authenticated local `/health` and `/workloads/NAME/health` requests. Confirm that
     the agent listens only on loopback port 6720.
 
 The standalone failover Compose file replaces the legacy deployment only during
@@ -70,7 +70,7 @@ name. Do not run both deployment procedures independently after enrollment.
 3. Bypass caching for the configured probe path, initially `/`. Verify the public
    response is not cached. Probe query strings and request headers alone are
    insufficient. Use matching `readiness_path` and `expected_status` on the
-   controller and both agents; replace all legacy `health_path` fields.
+   controller and both agents.
 4. Create `ranger-agent-black-box` and `ranger-agent-white-box` as HTTP VPC
    services targeting `127.0.0.1:6720` through their respective tunnels. Use Shed's `vpc-services.example.json` as the configuration reference.
    Verify this private route end to end before activation. Do not add public
@@ -92,28 +92,25 @@ routing before enrollment. These are not reasons to expose an agent.
    `compose.ranger.yml`. Confirm local and public `/` return HTTP 200 and DNS points to
    white-box. A public response does not prove serving-node identity.
    Keep the black-box copy stopped.
-2. From this repository, render bootstrap configuration:
+2. From this repository, render the Worker configuration. The cron schedule is
+   generated from `check_interval`:
 
    ```sh
-   PYTHONPATH=src uv run python scripts/configure-worker.py ../shed/ranger/cluster.local.json --bootstrap
+   PYTHONPATH=src uv run python scripts/configure-worker.py ../shed/ranger/cluster.local.json
    ```
 
-3. Set Worker secrets `DNS_API_TOKEN`, `STATUS_TOKEN`, `BLACK_BOX_TOKEN`, and
-   `WHITE_BOX_TOKEN` using `uv run pywrangler secret put NAME --config
-   wrangler.local.jsonc`. Match agent tokens and use at least 32 random
-   characters for `STATUS_TOKEN`. Never commit secrets or shell transcripts.
+3. Set Worker secrets `DNS_API_TOKEN`, `STATUS_TOKEN`, and `AGENT_TOKEN` using
+   `uv run pywrangler secret put NAME --config wrangler.local.jsonc`.
+   `AGENT_TOKEN` matches the agents' token. Use at least 32 random characters
+   for `STATUS_TOKEN`. Never commit secrets or shell transcripts.
 4. Deploy Worker `ranger` with `uv run pywrangler deploy --config wrangler.local.jsonc`.
    The fresh `v1` migration creates the `Cluster` namespace.
-   Both entrypoints select singleton `ranger-v1`. The temporary minute Cron
-   invokes an internal Durable Object initialization path. It only schedules a missing alarm. There is no public initialization API.
+   Both entrypoints select singleton `ranger-v1`. The cron trigger calls an
+   internal Durable Object cycle route. There is no public way to run a cycle.
 5. Query authenticated `GET /status`. Wait for `last_cycle` and verify both
    observations and the white-box DNS target. Confirm private probes work.
-6. Render again without `--bootstrap`, then deploy that configuration. This
-   removes the temporary Cron. Subsequent reconciliation uses alarms alone.
 
-The status endpoint never initializes or changes controller state. The temporary
-bootstrap procedure can repair a missing alarm after an operational incident.
-Keep the Durable Object binding, class, migration history, and singleton name
+The status endpoint never changes controller state. Keep the Durable Object binding, class, migration history, and singleton name
 unchanged across ordinary deployments.
 
 ## Run live acceptance
@@ -123,8 +120,8 @@ unchanged across ordinary deployments.
    threshold, replacement readiness, DNS write, and accepted public HTTP status.
 3. Record the time from first failed request to sustained public recovery.
    DNS API acknowledgement alone does not establish cutover time.
-4. Verify the old copy stops after the 45-second drain and the fallback serves.
-5. Verify failback waits for five minutes of stability before starting and
+4. Verify the old copy stops after the one-minute drain and the fallback serves.
+5. Verify failback waits for ten minutes of stability before starting and
    validating the preferred copy. Confirm DNS points to white-box and public
    HTTP readiness passes.
 6. Schedule host shutdown and network-loss drills separately. Avoid stopping
@@ -140,7 +137,7 @@ measuring the real Cloudflare route change.
 2. Save status and determine which copies are actually healthy.
 3. Manually start and verify the intended serving copy with approved Compose
    configuration. Restore its DNS target using an operator credential.
-4. Verify public readiness and wait 45 seconds before stopping another copy.
+4. Verify public readiness and wait one minute before stopping another copy.
 5. Keep controller state for diagnosis. For permanent removal, delete the
    Worker after recording status and confirming manual service ownership.
 

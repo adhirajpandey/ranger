@@ -1,15 +1,15 @@
 # Controller and agent reference
 
 All responses are JSON. Agents require `Authorization: Bearer TOKEN` on every
-route. The Worker requires the separate status token on `GET /status`.
+route. Both agents share one token. The Worker requires the separate status
+token on `GET /status`.
 
 ## Agent routes
 
 | Route | Response |
 | --- | --- |
-| `GET /health` | Node name, Docker availability, configuration revision |
-| `GET /workloads` | Configured workload names mapped to observations |
-| `GET /workloads/:name/health` | Running state, readiness, agent node, http_status, operation state |
+| `GET /health` | Node name and Docker availability |
+| `GET /workloads/:name/health` | `state`, agent node, `http_status`, operation state |
 | `POST /workloads/:name/start` | HTTP 202 while the idempotent start operation runs |
 | `POST /workloads/:name/stop` | HTTP 202 while the idempotent stop operation runs |
 
@@ -32,9 +32,11 @@ It requires an accepted HTTP status, a running container, and healthy Docker
 health status when a Docker healthcheck exists. No application body is parsed.
 `readiness_path` defaults to `/`; `expected_status` defaults to `[200]` and accepts
 a nonempty list of integer statuses from 200 through 599. The path must be local,
-without a query or fragment. Legacy `health_path` is rejected with a migration
-message. Configure the same policy on agents and the controller.
+without a query or fragment. Unknown keys are rejected. Configure the same
+policy on agents and the controller.
 
+`state` is `stopped` (no running container), `unready` (running, but readiness
+fails), `ready`, or `error` (Docker or the agent could not be observed).
 `http_status` is the observed status or null if no HTTP response arrived. `node`
 is supplied by the agent, not the application. Application release identity is
 no longer reported. Redirects are not followed, but an explicitly accepted
@@ -42,15 +44,15 @@ redirect or error status can pass readiness.
 
 ## Controller state
 
-Status includes `nodes`, `workloads`, `next_check`, `last_cycle`, and
+Status includes `nodes`, `workloads`, `last_cycle`, and
 `last_successful_cycle`. The latter advances only when workloads report no error.
 Each workload includes `current`, `desired`, `observations`, `dns_target`,
 `transition`, and `error`. `current` is DNS-observed placement. Both actual
 process observations remain visible because overlap is permitted.
 
 Transition phases are `starting`, `switching`, `verifying`, and `draining`.
-Intent is persisted before mutations. Readiness successes are separated in time.
-Failed checks count at the normal sample interval, not once per alarm retry.
+Intent is persisted before mutations. Each cycle counts at most one failed
+check and one readiness success.
 Failed startup backs off for the recovery stability period.
 
 An unreachable previous node leaves cleanup pending while the new copy serves.
