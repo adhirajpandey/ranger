@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import json
 
 import pytest
 
@@ -50,6 +51,7 @@ class IO:
         self.public_ok = True
         self.routed = "white-box"
         self.changes = []
+        self.record = {}
 
     async def node(self, node):
         return {"node": node, "docker": self.nodes[node]}
@@ -63,11 +65,14 @@ class IO:
 
     async def dns(self, spec):
         assert spec["zone_id"] == "a" * 32 and spec["record_id"] == "b" * 32
+        if isinstance(self.record, Exception):
+            raise self.record
         return {
             "name": spec["hostname"],
             "type": "CNAME",
             "proxied": True,
             "content": CONFIG["nodes"][self.routed]["tunnel_target"],
+            **self.record,
         }
 
     async def set_dns(self, spec, target):
@@ -212,3 +217,76 @@ async def test_workload_probes_run_concurrently():
     c.io.workload = workload
     await c.tick()
     assert all(o["state"] != "error" for o in c.workload["observations"].values())
+
+
+def events(capsys):
+    return [json.loads(line)["event"] for line in capsys.readouterr().out.splitlines()]
+
+
+async def test_failover_logs_each_step(capsys):
+    c = Cluster()
+    await c.tick()
+    c.io.healthy["white-box"] = False
+    await c.tick(4)
+    c.io.healthy["white-box"] = True
+    await c.tick(2)
+    assert events(capsys) == [
+        "node_status",
+        "node_status",
+        "failover_started",
+        "start_requested",
+        "dns_switched",
+        "public_check_passed",
+        "stop_requested",
+        "transition_completed",
+    ]
+
+
+async def test_errors_describe_the_current_cycle(capsys):
+    c = Cluster()
+    await c.tick()
+    c.io.record = RuntimeError("Cloudflare DNS request failed")
+    await c.tick(2)
+    assert c.workload["error"] == "Cloudflare DNS request failed"
+    assert c.store.value["last_successful_cycle"] < c.store.value["last_cycle"]
+    c.io.record = {}
+    await c.tick()
+    assert c.workload["error"] is None
+    assert c.store.value["last_successful_cycle"] == c.store.value["last_cycle"]
+    # A persisting error is logged once, and so is its recovery.
+    assert events(capsys)[-2:] == ["workload_error", "workload_error_cleared"]
+
+
+async def test_failed_replacement_backs_off_explicitly():
+    c = Cluster()
+    await c.tick()
+    c.io.healthy["white-box"] = False
+    c.io.healthy["black-box"] = False
+    await c.tick(7)
+    assert c.workload["transition"] is None
+    assert c.workload["backoff"]["reason"].startswith("replacement startup")
+    await c.tick()
+    assert "failover paused" in c.workload["error"]
+    await c.tick(10)
+    assert c.workload["backoff"] is None
+    assert c.workload["transition"]["phase"] == "starting"
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        {"content": "33333333-3333-3333-3333-333333333333.cfargotunnel.com"},
+        {"proxied": False},
+        {"type": "A"},
+        {"name": "other.example.com"},
+    ],
+)
+async def test_unexpected_dns_record_is_left_untouched(record):
+    c = Cluster()
+    await c.tick()
+    c.io.record = record
+    c.io.healthy["white-box"] = False
+    await c.tick(6)
+    assert c.io.changes == []
+    assert not c.io.running["black-box"]
+    assert c.workload["error"]

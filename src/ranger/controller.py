@@ -1,6 +1,17 @@
 """Persisted reconciliation, independent of the Workers runtime."""
 
 import asyncio
+import json
+
+
+def event(name, **fields):
+    """Emit one structured log line. Workers observability indexes JSON output."""
+    print(json.dumps({"event": name, **fields}))
+
+
+def describe(exc):
+    # Adapters raise sanitized messages, never token-bearing requests.
+    return str(exc) or type(exc).__name__
 
 
 async def settle(calls):
@@ -11,7 +22,7 @@ async def settle(calls):
 
 def observation(result):
     if isinstance(result, Exception):
-        return {"state": "error", "error": type(result).__name__}
+        return {"state": "error", "error": describe(result)}
     return result
 
 
@@ -54,14 +65,17 @@ class Reconciler:
             for node in nodes:
                 result = health[node]
                 if isinstance(result, Exception):
-                    result = {"error": type(result).__name__}
+                    result = {"error": describe(result)}
                 node_state = state["nodes"].setdefault(
                     node, {"failures": 0, "status": "unknown", "healthy_since": None}
                 )
                 available = result.get("node") == node and result.get("docker") is True
                 node_state["available"] = available
                 node_state["observation"] = result
+                previous = node_state["status"]
                 self.update_node(node_state, available, now)
+                if node_state["status"] != previous:
+                    event("node_status", node=node, previous=previous, status=node_state["status"])
             await self.store.save(state)
             for name, spec in workloads.items():
                 w = state["workloads"].setdefault(
@@ -72,16 +86,21 @@ class Reconciler:
                         "transition": None,
                         "failures": {},
                         "preferred_since": None,
-                        "retry_after": 0,
+                        "backoff": None,
                         "error": None,
                     },
                 )
                 observations = {node: observation(observed[name, node]) for node in nodes}
+                # Errors describe this cycle only; the logs keep their history.
+                previous, w["error"] = w["error"], None
                 try:
                     await self.workload(state, name, spec, w, observations, records[name], now)
                 except Exception as exc:
-                    # External adapters expose sanitized exceptions, never token-bearing requests.
-                    w["error"] = str(exc)
+                    w["error"] = describe(exc)
+                if w["error"] and w["error"] != previous:
+                    event("workload_error", workload=name, error=w["error"])
+                elif previous and not w["error"]:
+                    event("workload_error_cleared", workload=name)
                 await self.store.save(state)
             state["last_cycle"] = now
             if not any(w.get("error") for w in state["workloads"].values()):
@@ -140,8 +159,11 @@ class Reconciler:
             await self.advance(state, name, spec, w, observations, routed, now)
             return
         w["desired"] = routed
-        if now < w["retry_after"]:
-            return
+        if w["backoff"]:
+            if now < w["backoff"]["until"]:
+                w["error"] = f"{w['backoff']['reason']}; failover paused until the backoff ends"
+                return
+            w["backoff"] = None
         failed = w["failures"].get(routed, 0) >= self.policy["failure_threshold"]
         other = next(node for node in self.config["nodes"] if node != routed)
         failback = (
@@ -156,6 +178,12 @@ class Reconciler:
             w["error"] = "no eligible destination; DNS unchanged"
             return
         w["desired"] = target
+        event(
+            "failover_started" if failed else "failback_started",
+            workload=name,
+            source=routed,
+            target=target,
+        )
         w["transition"] = {
             "source": routed,
             "target": target,
@@ -164,7 +192,6 @@ class Reconciler:
             "ready_count": 0,
             "drain_until": None,
         }
-        w["error"] = None
         await self.store.save(state)
         await self.advance(state, name, spec, w, observations, routed, now)
 
@@ -176,14 +203,16 @@ class Reconciler:
         target_ready = self.eligible(state, target) and ready(observed)
         if t["phase"] == "starting":
             if now >= t["deadline"]:
-                w["error"] = "replacement startup or readiness deadline exceeded"
-                w["transition"] = None
-                w["retry_after"] = now + self.policy["recovery_stability"]
+                reason = "replacement startup or readiness deadline exceeded"
+                w["error"], w["transition"] = reason, None
+                w["backoff"] = {"until": now + self.policy["recovery_stability"], "reason": reason}
+                event("transition_abandoned", workload=name, target=target, reason=reason)
                 return
             if not target_ready:
                 t["ready_count"] = 0
                 if self.eligible(state, target) and stopped(observed) and not pending(observed):
                     await self.store.save(state)
+                    event("start_requested", workload=name, node=target)
                     await self.io.change(target, name, "start")
                 return
             # Each cycle contributes at most one readiness success.
@@ -203,6 +232,7 @@ class Reconciler:
                 dns = await self.io.dns(spec)
                 if dns["content"] != target_tunnel:
                     raise RuntimeError("DNS readback has not confirmed destination")
+                event("dns_switched", workload=name, source=routed, target=target)
             w["current"] = target
             w["dns_target"] = target_tunnel
             t["phase"] = "verifying"
@@ -215,6 +245,7 @@ class Reconciler:
                     # Reconsider the observed placement next cycle, keeping both copies.
                     w["transition"] = None
                     w["error"] = "destination failed after cutover"
+                    event("transition_abandoned", workload=name, target=target, reason=w["error"])
                 return
             # DNS must still point to this target before stopping any previous copy.
             dns = await self.io.dns(spec)
@@ -227,7 +258,7 @@ class Reconciler:
             if t["phase"] == "verifying":
                 t["phase"] = "draining"
                 t["drain_until"] = now + self.policy["drain_seconds"]
-                w["error"] = None
+                event("public_check_passed", workload=name, target=target)
                 await self.store.save(state)
             if now < t["drain_until"]:
                 return
@@ -237,7 +268,8 @@ class Reconciler:
             source_obs = observations[source]
             if stopped(source_obs) and not pending(source_obs):
                 w["transition"] = None
-                w["error"] = None
+                event("transition_completed", workload=name, source=source, target=target)
                 return
             await self.store.save(state)
+            event("stop_requested", workload=name, node=source)
             await self.io.change(source, name, "stop")
