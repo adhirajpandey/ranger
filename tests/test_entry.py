@@ -21,8 +21,11 @@ def transport(monkeypatch):
     ffi = ModuleType("pyodide.ffi")
     ffi.to_js = lambda options, **kwargs: options
     workers = ModuleType("workers")
-    for name in ("DurableObject", "Request", "Response", "WorkerEntrypoint"):
+    for name in ("DurableObject", "Request", "WorkerEntrypoint"):
         setattr(workers, name, type(name, (), {}))
+    workers.Response = lambda body, status=200, headers=None: SimpleNamespace(
+        body=body, status=status, headers=headers
+    )
     for name, module in (("js", js), ("pyodide.ffi", ffi), ("workers", workers)):
         monkeypatch.setitem(sys.modules, name, module)
     spec = importlib.util.spec_from_file_location(
@@ -68,7 +71,7 @@ async def test_management_transport_retains_json_and_success_requirement(transpo
         await cluster.request("https://example.com/api")
 
 
-async def test_scheduled_bootstrap_initializes_named_cluster(transport):
+async def test_scheduled_run_cycles_the_named_cluster_at_its_scheduled_time(transport):
     cluster, _ = transport
     module = cluster.entry_module
     request = object()
@@ -78,8 +81,24 @@ async def test_scheduled_bootstrap_initializes_named_cluster(transport):
     handler = object.__new__(module.Default)
     handler.env = SimpleNamespace(CLUSTER=binding)
 
-    await handler.scheduled(SimpleNamespace(), handler.env, SimpleNamespace())
+    await handler.scheduled(SimpleNamespace(scheduledTime=120_000), handler.env, SimpleNamespace())
 
     binding.getByName.assert_called_once_with("ranger-v1")
-    module.Request.assert_called_once_with("http://internal/initialize", method="POST")
+    module.Request.assert_called_once_with(
+        "http://internal/cycle", method="POST", body=json.dumps({"now": 120.0})
+    )
     stub.fetch.assert_awaited_once_with(request)
+
+
+async def test_cycle_route_reports_failure(transport):
+    cluster, _ = transport
+    cluster.reconciler = SimpleNamespace(cycle=AsyncMock())
+    request = SimpleNamespace(
+        method="POST",
+        url="http://internal/cycle",
+        text=AsyncMock(return_value=json.dumps({"now": 120.0})),
+    )
+    assert (await cluster.fetch(request)).status == 200
+    cluster.reconciler.cycle.assert_awaited_once_with(120.0)
+    cluster.reconciler.cycle.side_effect = RuntimeError("unexpected")
+    assert (await cluster.fetch(request)).status == 500

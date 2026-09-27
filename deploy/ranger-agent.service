@@ -9,7 +9,7 @@ SupplementaryGroups=docker
 WorkingDirectory=/home/adhiraj/projects/ranger
 Environment=PYTHONPATH=/home/adhiraj/projects/ranger/src
 EnvironmentFile=/etc/ranger/agent.env
-ExecStart=/home/adhiraj/projects/ranger/.venv/bin/python -m ranger.agent --config /etc/ranger/agent.json --host 127.0.0.1 --port 6720
+ExecStart=/home/adhiraj/projects/ranger/.venv/bin/python -m ranger.agent --config /etc/ranger/agent.json
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=15

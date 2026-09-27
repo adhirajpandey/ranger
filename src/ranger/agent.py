@@ -4,7 +4,6 @@ import argparse
 import hmac
 import json
 import os
-import re
 import subprocess
 import threading
 import urllib.error
@@ -13,28 +12,20 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from ranger.readiness import configure_readiness
-
-NAME = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]*\Z")
+from ranger.config import validate_agent_config
 
 
 def load_config(path):
-    config = json.loads(Path(path).read_text())
-    if not NAME.fullmatch(config["node"]):
-        raise ValueError("invalid node")
-    for name, item in config["workloads"].items():
-        if not all(NAME.fullmatch(n) for n in (name, item["project"], item["service"])):
-            raise ValueError("invalid workload, project or service")
-        if not Path(item["compose_file"]).is_absolute():
-            raise ValueError("compose_file must be absolute")
-        if item.get("env_file") and not Path(item["env_file"]).is_absolute():
-            raise ValueError("env_file must be absolute")
-        if not 1 <= item["port"] <= 65535:
-            raise ValueError("invalid port")
-        configure_readiness(item)
-        if item.get("pull", "missing") not in {"never", "missing", "always"}:
-            raise ValueError("invalid pull policy")
-    return config
+    return validate_agent_config(json.loads(Path(path).read_text()))
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+# No proxy or redirects: readiness must come from the configured local origin.
+OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
 
 
 class Docker:
@@ -66,45 +57,42 @@ class Docker:
         self.run(["info", "--format", "{{.ServerVersion}}"], self.probe_timeout)
 
     def observe(self, item, node):
+        """Report the service as stopped, unready, or ready."""
         ids = self.run(
             [*self.compose(item), "ps", "--all", "--quiet", item["service"]],
             self.probe_timeout,
         ).split()
-        result = {"running": False, "ready": False, "node": node, "http_status": None}
+        result = {"node": node, "state": "stopped", "http_status": None}
         if not ids:
             return result
         if len(ids) != 1:
-            raise RuntimeError("v1 expects one container per service")
-        state = json.loads(
+            raise RuntimeError("expected one container per service")
+        container = json.loads(
             self.run(
                 ["inspect", "--format", "{{json .State}}", ids[0]],
                 self.probe_timeout,
             )
         )
-        result["running"] = state["Running"]
-        result["docker_health"] = state.get("Health", {}).get("Status", "none")
-        if not result["running"]:
+        result["docker_health"] = container.get("Health", {}).get("Status", "none")
+        if not container["Running"]:
             return result
-        url = f"http://127.0.0.1:{item['port']}{item.get('readiness_path', '/')}"
+        result["state"] = "unready"
+        url = f"http://127.0.0.1:{item['port']}{item['readiness_path']}"
         request = urllib.request.Request(url, headers={"Cache-Control": "no-cache"})
         try:
-            # No proxy or redirects: readiness must come from the configured local origin.
-            class NoRedirect(urllib.request.HTTPRedirectHandler):
-                def redirect_request(self, *args, **kwargs):
-                    return None
-
-            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
             try:
-                response = opener.open(request, timeout=self.probe_timeout)
+                response = OPENER.open(request, timeout=self.probe_timeout)
             except urllib.error.HTTPError as exc:
                 response = exc
             with response:
                 result["http_status"] = response.code
-                result["ready"] = response.code in item.get("expected_status", [200]) and result[
-                    "docker_health"
-                ] in {"none", "healthy"}
         except (OSError, ValueError):
-            pass
+            return result
+        if result["http_status"] in item["expected_status"] and result["docker_health"] in {
+            "none",
+            "healthy",
+        }:
+            result["state"] = "ready"
         return result
 
     def change(self, item, action):
@@ -115,7 +103,7 @@ class Docker:
                 "--no-build",
                 "--no-deps",
                 "--pull",
-                item.get("pull", "missing"),
+                item["pull"],
                 item["service"],
             ]
         else:
@@ -137,11 +125,7 @@ class Agent:
             available = True
         except (OSError, RuntimeError, subprocess.TimeoutExpired):
             available = False
-        return {
-            "node": self.config["node"],
-            "docker": available,
-            "config_revision": self.config.get("revision", "unknown"),
-        }
+        return {"node": self.config["node"], "docker": available}
 
     def observe(self, name):
         item = self.config["workloads"][name]
@@ -149,9 +133,8 @@ class Agent:
             result = self.docker.observe(item, self.config["node"])
         except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
             result = {
-                "running": False,
-                "ready": False,
                 "node": self.config["node"],
+                "state": "error",
                 "http_status": None,
                 "error": type(exc).__name__,
             }
@@ -171,7 +154,7 @@ class Agent:
             try:
                 item = self.config["workloads"][name]
                 observation = self.docker.observe(item, self.config["node"])
-                if observation["running"] != (action == "start"):
+                if (observation["state"] == "stopped") == (action == "start"):
                     self.docker.change(item, action)
             except Exception as exc:
                 with self.guard:
@@ -213,8 +196,6 @@ def handler_for(agent, token):
             path = urlsplit(self.path).path
             if self.command == "GET" and path == "/health":
                 return self.reply(200, agent.health())
-            if self.command == "GET" and path == "/workloads":
-                return self.reply(200, {name: agent.observe(name) for name in agent.locks})
             parts = path.strip("/").split("/")
             if len(parts) != 3 or parts[0] != "workloads" or parts[1] not in agent.locks:
                 return self.reply(404, {"error": "unknown workload or route"})

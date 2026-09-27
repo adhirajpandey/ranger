@@ -30,7 +30,7 @@ class FakeDocker:
         pass
 
     def observe(self, item, node):
-        return {"running": self.running, "ready": self.running, "node": node}
+        return {"node": node, "state": "ready" if self.running else "stopped"}
 
     def change(self, item, action):
         self.running = action == "start"
@@ -58,16 +58,18 @@ def exercise_agent(agent):
             request("/workloads/not-allowed/start", "POST")
         assert error.value.code == 404
         assert request("/health")["docker"]
-        for action, desired in (("start", True), ("start", True), ("stop", False), ("stop", False)):
+        steps = (("start", "ready"), ("start", "ready"), ("stop", "stopped"), ("stop", "stopped"))
+        for action, desired in steps:
             request(f"/workloads/test/{action}", "POST")
             eventually(
                 lambda: (
-                    request("/workloads/test/health").get("running") == desired
+                    request("/workloads/test/health")["state"] == desired
                     and request("/workloads/test/health")["operation"]["pending"] is None
                 )
             )
-            eventually(lambda: request("/workloads/test/health")["ready"] == desired)
-        assert not request("/workloads")["test"]["running"]
+        with pytest.raises(urllib.error.HTTPError) as error:
+            request("/workloads", "GET")
+        assert error.value.code == 404
     finally:
         server.shutdown()
         server.server_close()
@@ -78,7 +80,23 @@ def test_agent_contract():
     exercise_agent(Agent({"node": "test-node", "workloads": {"test": {}}}, FakeDocker()))
 
 
-@pytest.mark.docker
+def test_conflicting_action_is_rejected_while_one_is_pending():
+    release = threading.Event()
+
+    class SlowDocker(FakeDocker):
+        def change(self, item, action):
+            release.wait(10)
+            super().change(item, action)
+
+    agent = Agent({"node": "test-node", "workloads": {"test": {}}}, SlowDocker())
+    assert agent.change("test", "start") == 202
+    assert agent.change("test", "start") == 202
+    assert agent.change("test", "stop") == 409
+    release.set()
+    eventually(lambda: agent.observe("test")["operation"]["pending"] is None)
+    assert agent.observe("test")["state"] == "ready"
+
+
 @pytest.mark.skipif(os.environ.get("RUN_DOCKER_TESTS") != "1", reason="opt-in Docker fixture")
 def test_real_compose_agent():
     item = {
@@ -87,6 +105,7 @@ def test_real_compose_agent():
         "service": "app",
         "port": 16740,
         "readiness_path": "/",
+        "expected_status": [200],
         "pull": "missing",
     }
     docker = Docker()

@@ -1,14 +1,14 @@
 # Failover design
 
 One named Durable Object owns cluster intent and transition state. At most one
-reconciliation cycle runs at a time. Alarms continue persisted transitions.
+reconciliation cycle runs at a time. A one-minute Worker cron runs each cycle.
 Agents inspect Docker and execute allowlisted Compose operations. Start and stop
 are idempotent, serialized per workload, and bounded. Agents have no journals,
 operation IDs, or generations.
 
-Defaults are 20-second checks, five-second probe deadlines, three consecutive
-failures, two readiness successes at least five seconds apart, a 120-second
-startup deadline, five-minute recovery stability, and a 45-second drain.
+Defaults are 60-second checks, five-second probe deadlines, two consecutive
+failures, two readiness successes in consecutive checks, a five-minute startup
+deadline, ten-minute recovery stability, and a one-minute drain.
 
 Failover starts the alternative copy, verifies readiness, updates DNS by the
 configured zone and record IDs, verifies public HTTP status, then drains and
@@ -42,7 +42,7 @@ Infinite-Memes mounts. Its source revision was
 Workers VPC is beta. Account permissions and deployed private routing are untested.
 
 - [Python Workers](https://developers.cloudflare.com/workers/languages/python/)
-- [Durable Object alarms](https://developers.cloudflare.com/durable-objects/api/alarms/)
+- [Cron Triggers](https://developers.cloudflare.com/workers/configuration/cron-triggers/)
 - [Workers VPC requirements](https://developers.cloudflare.com/workers-vpc/configuration/tunnel/)
 - [Tunnel DNS](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/routing-to-tunnel/dns/)
 

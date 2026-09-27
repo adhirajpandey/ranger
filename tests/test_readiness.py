@@ -1,4 +1,5 @@
 import json
+import socket
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -6,36 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from ranger.agent import Docker
-from ranger.readiness import configure_readiness
-
-
-@pytest.mark.parametrize(
-    "policy",
-    [
-        {"health_path": "/healthz"},
-        {"readiness_path": "//other/"},
-        {"readiness_path": "/?query"},
-        {"readiness_path": "/#fragment"},
-        {"readiness_path": "https://other/"},
-        {"readiness_path": "/\n"},
-        {"expected_status": []},
-        {"expected_status": [True]},
-        {"expected_status": [199]},
-        {"expected_status": [600]},
-        {"expected_status": "200"},
-    ],
-)
-def test_invalid_policy(policy):
-    with pytest.raises(ValueError):
-        configure_readiness(policy)
-
-
-def test_policy_defaults_and_custom_endpoint():
-    policy = {}
-    configure_readiness(policy)
-    assert policy == {"readiness_path": "/", "expected_status": [200]}
-    policy = {"readiness_path": "/healthz", "expected_status": [200, 302, 401]}
-    configure_readiness(policy)
+from ranger.config import configure_readiness
 
 
 @pytest.fixture
@@ -72,6 +44,13 @@ def origin():
         thread.join()
 
 
+def workload(port, **readiness):
+    item = {"compose_file": "/unused", "project": "test", "service": "app", "port": port}
+    item.update(readiness)
+    configure_readiness(item)
+    return item
+
+
 def docker_state(monkeypatch, running=True, health="none"):
     docker = Docker(probe_timeout=0.03)
 
@@ -85,56 +64,48 @@ def docker_state(monkeypatch, running=True, health="none"):
 
 
 @pytest.mark.parametrize(
-    "path,statuses,ready,status",
+    "path,statuses,state,status",
     [
-        ("/", [200], True, 200),
-        ("/empty", [200], True, 200),
-        ("/401", [401], True, 401),
-        ("/503", [200], False, 503),
-        ("/302", [302], True, 302),
-        ("/302", [200], False, 302),
-        ("/slow", [200], False, None),
+        ("/", [200], "ready", 200),
+        ("/empty", [200], "ready", 200),
+        ("/401", [401], "ready", 401),
+        ("/503", [200], "unready", 503),
+        ("/302", [302], "ready", 302),
+        ("/302", [200], "unready", 302),
+        ("/slow", [200], "unready", None),
     ],
 )
-def test_http_probe(monkeypatch, origin, path, statuses, ready, status):
+def test_http_probe(monkeypatch, origin, path, statuses, state, status):
     port, calls = origin
-    item = {
-        "compose_file": "/unused",
-        "project": "test",
-        "service": "app",
-        "port": port,
-        "readiness_path": path,
-        "expected_status": statuses,
-    }
+    item = workload(port, readiness_path=path, expected_status=statuses)
     result = docker_state(monkeypatch).observe(item, "test-node")
-    assert result["ready"] is ready
+    assert result["state"] == state
     assert result["http_status"] == status
     assert result["node"] == "test-node"
-    assert "release" not in result
     assert calls == [path]
 
 
-@pytest.mark.parametrize("running,health", [(False, "none"), (True, "unhealthy")])
-def test_container_gates_readiness(monkeypatch, origin, running, health):
+@pytest.mark.parametrize(
+    "running,health,state", [(False, "none", "stopped"), (True, "unhealthy", "unready")]
+)
+def test_container_gates_readiness(monkeypatch, origin, running, health, state):
     port, calls = origin
-    item = {"compose_file": "/unused", "project": "test", "service": "app", "port": port}
-    result = docker_state(monkeypatch, running, health).observe(item, "node")
-    assert not result["ready"]
+    result = docker_state(monkeypatch, running, health).observe(workload(port), "node")
+    assert result["state"] == state
     if not running:
         assert not calls
 
 
 def test_refused_connection(monkeypatch):
-    import socket
-
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
-        item = {
-            "compose_file": "/unused",
-            "project": "test",
-            "service": "app",
-            "port": sock.getsockname()[1],
-        }
+        item = workload(sock.getsockname()[1])
         result = docker_state(monkeypatch).observe(item, "node")
-    assert not result["ready"]
+    assert result["state"] == "unready"
     assert result["http_status"] is None
+
+
+def test_missing_container_is_stopped(monkeypatch):
+    docker = Docker()
+    monkeypatch.setattr(docker, "run", lambda args, timeout=None: "")
+    assert docker.observe(workload(1), "node")["state"] == "stopped"

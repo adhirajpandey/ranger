@@ -18,7 +18,6 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 asyncio_mode = "auto"
-markers = ["docker: disposable Docker Compose integration"]
 
 [tool.ruff]
 target-version = "py312"

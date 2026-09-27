@@ -2,7 +2,6 @@
 
 import hmac
 import json
-import time
 from urllib.parse import urlsplit
 
 from js import AbortSignal, Object
@@ -12,7 +11,11 @@ from pyodide.ffi import to_js
 from workers import DurableObject, Request, Response, WorkerEntrypoint
 
 from ranger.cloudflare import CloudflareIO
-from ranger.controller import Reconciler, validate_config
+from ranger.config import validate_cluster_config
+from ranger.controller import Reconciler
+
+# The single controller instance. Renaming it starts a new, empty controller state.
+CLUSTER_NAME = "ranger-v1"
 
 
 class DurableStore:
@@ -31,13 +34,9 @@ class Cluster(DurableObject):
     def __init__(self, ctx, env):
         super().__init__(ctx, env)
         self.store = DurableStore(ctx.storage)
-        self.config = validate_config(json.loads(env.CLUSTER_CONFIG))
-        tokens = {
-            node: getattr(env, config["agent_secret"])
-            for node, config in self.config["nodes"].items()
-        }
-        io = CloudflareIO(self.config, self.request, env.DNS_API_TOKEN, tokens)
-        self.reconciler = Reconciler(self.config, self.store, io, time.time)
+        self.config = validate_cluster_config(json.loads(env.CLUSTER_CONFIG))
+        io = CloudflareIO(self.config, self.request, env.DNS_API_TOKEN, env.AGENT_TOKEN)
+        self.reconciler = Reconciler(self.config, self.store, io)
 
     async def request(
         self, url, method="GET", headers=None, body=None, binding=None, status_only=False
@@ -72,27 +71,18 @@ class Cluster(DurableObject):
             ) from None
 
     async def fetch(self, request):
-        if urlsplit(request.url).path == "/initialize":
+        if request.method == "POST" and urlsplit(request.url).path == "/cycle":
             # Internal binding only. The public Worker does not forward this route.
-            async with self.reconciler.lock:
-                if await self.ctx.storage.getAlarm() is None:
-                    await self.ctx.storage.setAlarm(int(time.time() * 1000) + 1000)
-            return Response("initialized")
+            try:
+                await self.reconciler.cycle(json.loads(await request.text())["now"])
+            except Exception as exc:
+                print(json.dumps({"event": "cycle_failed", "error": type(exc).__name__}))
+                return Response("cycle failed", status=500)
+            return Response("cycle complete")
         return Response(
             json.dumps(await self.store.load() or {"status": "not initialized"}),
             headers={"Content-Type": "application/json", "Cache-Control": "no-store"},
         )
-
-    async def alarm(self, alarm_info=None):
-        delay = self.config["policy"]["check_interval"]
-        # Schedule before external work so abrupt termination also leaves a future wakeup.
-        await self.ctx.storage.setAlarm(int(time.time() * 1000) + delay * 1000)
-        try:
-            delay = await self.reconciler.cycle()
-        except Exception as exc:
-            print(json.dumps({"event": "cycle_failed", "error": type(exc).__name__}))
-        finally:
-            await self.ctx.storage.setAlarm(int(time.time() * 1000) + delay * 1000)
 
 
 class Default(WorkerEntrypoint):
@@ -105,10 +95,14 @@ class Default(WorkerEntrypoint):
             provided.encode(), f"Bearer {token}".encode()
         ):
             return Response("unauthorized", status=401)
-        return await self.env.CLUSTER.getByName("ranger-v1").fetch(request)
+        return await self.env.CLUSTER.getByName(CLUSTER_NAME).fetch(request)
 
     async def scheduled(self, controller, env, ctx):
-        # A temporary deployment bootstrap Cron creates the first alarm, then is removed.
-        await self.env.CLUSTER.getByName("ranger-v1").fetch(
-            Request("http://internal/initialize", method="POST")
+        # The cron schedule is the check interval. Its scheduled time keeps the cycle clock exact.
+        await self.env.CLUSTER.getByName(CLUSTER_NAME).fetch(
+            Request(
+                "http://internal/cycle",
+                method="POST",
+                body=json.dumps({"now": controller.scheduledTime / 1000}),
+            )
         )
