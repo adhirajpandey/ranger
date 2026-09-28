@@ -19,6 +19,24 @@ def test_examples_are_valid():
     validate_agent_config(example("agent.json"))
 
 
+def env_keys(name):
+    lines = (ROOT / "examples" / name).read_text().splitlines()
+    return {line.split("=", 1)[0] for line in lines if line and not line.startswith("#")}
+
+
+@pytest.mark.parametrize(
+    "name,source,keys",
+    [
+        ("worker.env", "src/entry.py", {"DNS_API_TOKEN", "AGENT_TOKEN", "STATUS_TOKEN"}),
+        ("agent.env", "src/ranger/agent.py", {"AGENT_TOKEN"}),
+    ],
+)
+def test_env_examples_list_the_secrets_the_code_reads(name, source, keys):
+    assert env_keys(name) == keys
+    code = (ROOT / source).read_text()
+    assert all(key in code for key in keys)
+
+
 def render(cluster, tmp_path):
     source, output = tmp_path / "cluster.json", tmp_path / "wrangler.json"
     source.write_text(json.dumps(cluster))

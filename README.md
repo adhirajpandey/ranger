@@ -70,7 +70,7 @@ in-flight requests.
 | `src/ranger/cloudflare.py` | Adapters for the agents, the DNS API, and the public probe |
 | `scripts/configure-worker.py` | Renders the Wrangler configuration from a cluster configuration |
 | `deploy/ranger-agent@.service` | systemd unit for the agent |
-| `examples/` | Example cluster and agent configurations |
+| `examples/` | Example cluster and agent configurations and secret files |
 
 The agent uses only the Python standard library. It accepts start, stop, and
 health requests for an allowlist of Compose services, and nothing else. The
@@ -125,7 +125,9 @@ To check that the Worker still packages, without deploying it:
 uv run pywrangler deploy --dry-run
 ```
 
-CI runs all of these on every pull request.
+CI runs all of these on every pull request. On a push to `main`, it also
+deploys the Worker when the deploy secrets are configured. See
+[Operate Ranger](docs/operations.md#deploy-from-github-actions).
 
 ## Documentation
 

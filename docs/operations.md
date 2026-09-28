@@ -13,8 +13,8 @@ You need:
   host networking. Each tunnel must belong to one host only.
 - A Cloudflare account on the free plan or higher, with the workload's zone.
 - [uv](https://docs.astral.sh/uv/) on both hosts.
-- A checkout of this repository on the machine you deploy from, with uv and
-  Node.js 22.
+- A GitHub fork of this repository to deploy from with GitHub Actions, or a
+  checkout with uv and Node.js 22 to deploy by hand.
 
 Workers VPC is in beta. If your account cannot create VPC services, stop here.
 Do not expose an agent publicly to work around it.
@@ -77,7 +77,8 @@ Do this on both hosts.
    openssl rand -hex 32
    ```
 
-4. Write the token to `/etc/ranger-agent/agent.env`, readable only by root:
+4. Write the token to `/etc/ranger-agent/agent.env`, readable only by root, as
+   in [`examples/agent.env`](../examples/agent.env):
 
    ```text
    AGENT_TOKEN=the-token-from-step-3
@@ -107,6 +108,8 @@ equivalent to root on the host.
 
 ## Deploy the controller
 
+Do this once:
+
 1. In Cloudflare, create one Workers VPC service for each host:
 
    | Setting | Value |
@@ -119,49 +122,71 @@ equivalent to root on the host.
 2. Create an API token with DNS Read and DNS Edit on the workloads' zone. A
    zone-wide token can edit any record in the zone. Ranger limits itself to
    the configured record IDs.
-3. Copy [`examples/cluster.json`](../examples/cluster.json) to a file outside
-   the repository. Fill in the tunnel targets, the VPC service IDs, and each
-   workload's zone ID and record ID.
-4. Render the Wrangler configuration:
+3. Copy [`examples/cluster.json`](../examples/cluster.json) to a private
+   location outside the repository. Fill in the tunnel targets, the VPC service
+   IDs, and each workload's zone ID and record ID.
+4. Copy [`examples/worker.env`](../examples/worker.env) next to it and fill in
+   the three Worker secrets. `AGENT_TOKEN` is the agents' token. Generate a
+   separate `STATUS_TOKEN` with `openssl rand -hex 32`.
 
-   ```sh
-   PYTHONPATH=src uv run python scripts/configure-worker.py ~/ranger/cluster.json
-   ```
+### Deploy from GitHub Actions
 
-   The renderer writes `wrangler.local.jsonc`. It stops with an error if the
-   configuration is invalid or a VPC service ID is still a placeholder.
-5. Deploy the Worker:
+CI deploys the Worker on every push to `main` once the checks pass. It renders
+the Wrangler configuration, deploys with the Worker secrets, and then waits
+up to three minutes for `/status` to report a controller cycle that finished
+after the deploy. Without `CLOUDFLARE_API_TOKEN`, as in a fork, the deploy job
+does nothing.
 
-   ```sh
-   uv run pywrangler deploy --config wrangler.local.jsonc
-   ```
+Create an API token for the deploy with Workers Scripts Edit and Connectivity
+Directory Bind on the account. Then add these repository secrets:
 
-6. Set the three secrets. Enter each value when prompted.
+| Secret | Value |
+| --- | --- |
+| `CLOUDFLARE_API_TOKEN` | The deploy token |
+| `CLOUDFLARE_ACCOUNT_ID` | The Cloudflare account ID |
+| `RANGER_STATUS_URL` | `https://ranger.SUBDOMAIN.workers.dev`, without a trailing slash |
+| `RANGER_CLUSTER_CONFIG` | The cluster configuration, compacted to one line |
+| `RANGER_WORKER_SECRETS` | The Worker secrets file |
 
-   ```sh
-   uv run pywrangler secret put DNS_API_TOKEN --config wrangler.local.jsonc
-   uv run pywrangler secret put AGENT_TOKEN --config wrangler.local.jsonc
-   uv run pywrangler secret put STATUS_TOKEN --config wrangler.local.jsonc
-   ```
+GitHub masks a multi-line secret one line at a time, so compact the JSON:
 
-   `AGENT_TOKEN` is the agents' token. Generate a separate `STATUS_TOKEN` with
-   `openssl rand -hex 32`. Until all three secrets exist, cycles fail and the
-   Worker logs errors.
+```sh
+gh secret set CLOUDFLARE_API_TOKEN
+gh secret set CLOUDFLARE_ACCOUNT_ID
+gh secret set RANGER_STATUS_URL
+jq -c . ~/ranger/cluster.json | gh secret set RANGER_CLUSTER_CONFIG
+gh secret set RANGER_WORKER_SECRETS < ~/ranger/worker.env
+```
 
-7. Wait two minutes, then read the status:
+`SUBDOMAIN` is your account's workers.dev subdomain. GitHub secrets cannot be
+read back, so keep the files as the source and set the secrets again after
+each change. To deploy a changed value without a code change, rerun the
+latest CI run on `main`.
 
-   ```sh
-   curl -H "Authorization: Bearer $STATUS_TOKEN" https://ranger.SUBDOMAIN.workers.dev/status
-   ```
+After the first deploy, read the status:
 
-   `SUBDOMAIN` is your account's workers.dev subdomain. Expect HTTP 200. Both
-   nodes are `healthy`, each workload's `current` is its preferred node, and
-   `error` is `null`.
+```sh
+curl -H "Authorization: Bearer $STATUS_TOKEN" https://ranger.SUBDOMAIN.workers.dev/status
+```
 
-To change the configuration later, edit the cluster file, then repeat steps 4
-and 5. Do not rename the `Cluster` class, the `CLUSTER` binding, or the
-`ranger-v1` object name. Any of those changes starts the controller with empty
-state.
+Expect HTTP 200. Both nodes are `healthy`, each workload's `current` is its
+preferred node, and `error` is `null`.
+
+### Deploy by hand
+
+From a checkout with uv and Node.js 22, logged in with `wrangler login` or
+with `CLOUDFLARE_API_TOKEN` set:
+
+```sh
+PYTHONPATH=src uv run python scripts/configure-worker.py ~/ranger/cluster.json
+uv run pywrangler deploy --config wrangler.local.jsonc --secrets-file ~/ranger/worker.env
+```
+
+The renderer writes `wrangler.local.jsonc`. It stops with an error if the
+configuration is invalid or a VPC service ID is still a placeholder.
+
+Do not rename the `Cluster` class, the `CLUSTER` binding, or the `ranger-v1`
+object name. Any of those changes starts the controller with empty state.
 
 ## Watch the controller
 
@@ -184,9 +209,9 @@ uv tool upgrade ranger
 sudo systemctl restart ranger-agent@USER
 ```
 
-To upgrade the controller, pull the repository, then render and deploy as in
-steps 4 and 5 of [Deploy the controller](#deploy-the-controller). The
-controller keeps its state across deployments.
+The controller upgrades itself: every merge to `main` deploys it. It keeps its
+state across deployments. Agents are never upgraded by CI, so upgrade them by
+hand after a change to the agent or its API.
 
 ## Run a failover drill
 
