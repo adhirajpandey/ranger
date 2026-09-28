@@ -137,8 +137,9 @@ up to three minutes for `/status` to report a controller cycle that finished
 after the deploy. Without `CLOUDFLARE_API_TOKEN`, as in a fork, the deploy job
 does nothing.
 
-Create an API token for the deploy with Workers Scripts Edit and Connectivity
-Directory Bind on the account. Then add these repository secrets:
+Create an API token for the deploy with Workers Scripts Edit, Connectivity
+Directory Read, and Connectivity Directory Bind on the account. Without
+Connectivity Directory Read, the deploy fails with code 10196. Then add these repository secrets:
 
 | Secret | Value |
 | --- | --- |
