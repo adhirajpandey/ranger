@@ -131,6 +131,8 @@ deploys the Worker when the deploy secrets are configured. See
 
 ## Documentation
 
+- [Add a workload](docs/add-workload.md) covers enrolling another service in an
+  existing installation, including read-only preflight checks.
 - [How Ranger works](docs/architecture.md) explains the design, the failover
   cycle, the timing, and the limits.
 - [Operate Ranger](docs/operations.md) covers installing the agents, deploying

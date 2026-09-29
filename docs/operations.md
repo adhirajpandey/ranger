@@ -4,6 +4,9 @@ These guides set up Ranger on two hosts, deploy the controller, watch it, test
 a failover, and remove it again. The [reference](reference.md) lists every key
 and field that the steps mention.
 
+To enroll another service in an existing installation, follow
+[Add a workload](add-workload.md).
+
 ## Before you start
 
 You need:

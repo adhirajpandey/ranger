@@ -102,6 +102,30 @@ and `"no"` leave it stopped.
 
 ## Commands
 
+### `ranger-preflight`
+
+```text
+ranger-preflight --cluster FILE --agent FILE --agent FILE --workload NAME
+                 [--workload NAME ...] [--local-node NODE] [--dns]
+```
+
+Checks a proposed enrollment without changing containers, DNS, or files.
+Exit status is 0 on success and 1 when a check fails.
+
+| Option | Check |
+| --- | --- |
+| `--cluster` | Validates the controller configuration |
+| `--agent` | One configuration per cluster node; checks selected workloads exist in both allowlists and readiness settings match |
+| `--workload` | Selects a workload; repeat to check several |
+| `--local-node` | Inspects local Compose, service existence, one replica, restart policy, loopback TCP port, and locally available image; requires the preferred copy ready and standby stopped |
+| `--dns` | Reads each configured record by ID using `DNS_API_TOKEN`; requires a proxied CNAME for the hostname pointing at the preferred tunnel |
+
+Without `--local-node` or `--dns`, checks use configuration files only.
+Local checks require Docker and the Compose plugin. DNS requests time out
+after five seconds. The command does not verify image versions or CPU
+architectures, dependencies, tunnel routes, cache rules, or loaded agent
+configuration. See [Add a workload](add-workload.md) for those steps.
+
 ### `ranger-agent`
 
 ```text
