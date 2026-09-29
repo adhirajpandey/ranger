@@ -133,9 +133,9 @@ Do this once:
 
 CI deploys the Worker on every push to `main` once the checks pass. It renders
 the Wrangler configuration, deploys with the Worker secrets, and then waits
-up to three minutes for `/status` to report a controller cycle that finished
-after the deploy. Without `CLOUDFLARE_API_TOKEN`, as in a fork, the deploy job
-does nothing.
+up to three minutes for an authenticated request to `/status` to return HTTP
+200. Without `CLOUDFLARE_API_TOKEN`, as in a fork, deployment is skipped and
+the checks still run.
 
 Create an API token for the deploy with Workers Scripts Edit, Connectivity
 Directory Read, and Connectivity Directory Bind on the account. Without
