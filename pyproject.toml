@@ -9,6 +9,7 @@ dependencies = []
 
 [project.scripts]
 ranger-agent = "ranger.agent:main"
+ranger-preflight = "ranger.preflight:main"
 
 [build-system]
 requires = ["uv_build>=0.12,<0.13"]

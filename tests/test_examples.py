@@ -74,6 +74,7 @@ def test_renderer_writes_bindings_config_and_schedule(tmp_path, interval, schedu
         {"binding": "NODE_A_AGENT", "service_id": "service-0"},
         {"binding": "NODE_B_AGENT", "service_id": "service-1"},
     ]
+    assert wrangler["secrets"]["required"] == ["DNS_API_TOKEN", "AGENT_TOKEN", "STATUS_TOKEN"]
     embedded = json.loads(wrangler["vars"]["CLUSTER_CONFIG"])
     assert "vpc_service_id" not in embedded["nodes"]["node-a"]
     assert validate_cluster_config(embedded) == embedded
