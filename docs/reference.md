@@ -210,6 +210,11 @@ status. `error` means Docker or the agent could not be observed.
 | `AGENT_TOKEN` | Secret | The token shared by both agents |
 | `STATUS_TOKEN` | Secret | Bearer token for `GET /status`, at least 32 characters |
 
+All three secret names appear in Wrangler's `secrets.required` declaration.
+Deployment requires them to exist on the Worker or be supplied during initial
+bootstrap. Routine CI deployments inherit existing secrets. See
+[Provision Worker secrets](operations.md#provision-worker-secrets).
+
 ### Routes
 
 The Worker has one public route, `GET /status`, with

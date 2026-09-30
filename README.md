@@ -126,7 +126,8 @@ uv run pywrangler deploy --dry-run
 ```
 
 CI runs all of these on every pull request. On a push to `main`, it also
-deploys the Worker when the deploy secrets are configured. See
+deploys the Worker after the checks pass. Deployment requires configured
+credentials and provisioned Worker secrets. See
 [Operate Ranger](docs/operations.md#deploy-from-github-actions).
 
 ## Documentation

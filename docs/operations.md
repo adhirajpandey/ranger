@@ -134,11 +134,13 @@ Do this once:
 
 ### Deploy from GitHub Actions
 
-CI deploys the Worker on every push to `main` once the checks pass. It renders
-the Wrangler configuration, deploys with the Worker secrets, and then waits
-up to three minutes for an authenticated request to `/status` to return HTTP
-200. Without `CLOUDFLARE_API_TOKEN`, as in a fork, deployment is skipped and
-the checks still run.
+CI validates pull requests. On every push to `main`, a separate deploy job
+runs after the checks pass. It renders the Wrangler configuration and deploys
+with the Worker's existing secrets. Missing credentials fail the deploy job,
+including in an unconfigured fork.
+
+Before the first CI deployment, follow [Provision Worker secrets](#provision-worker-secrets).
+Keep Worker secret values outside GitHub Actions.
 
 Create an API token for the deploy with Workers Scripts Edit, Connectivity
 Directory Read, and Connectivity Directory Bind on the account. Without
@@ -148,33 +150,74 @@ Connectivity Directory Read, the deploy fails with code 10196. Then add these re
 | --- | --- |
 | `CLOUDFLARE_API_TOKEN` | The deploy token |
 | `CLOUDFLARE_ACCOUNT_ID` | The Cloudflare account ID |
-| `RANGER_STATUS_URL` | `https://ranger.SUBDOMAIN.workers.dev`, without a trailing slash |
 | `RANGER_CLUSTER_CONFIG` | The cluster configuration, compacted to one line |
-| `RANGER_WORKER_SECRETS` | The Worker secrets file |
 
 GitHub masks a multi-line secret one line at a time, so compact the JSON:
 
 ```sh
 gh secret set CLOUDFLARE_API_TOKEN
 gh secret set CLOUDFLARE_ACCOUNT_ID
-gh secret set RANGER_STATUS_URL
 jq -c . ~/ranger/cluster.json | gh secret set RANGER_CLUSTER_CONFIG
-gh secret set RANGER_WORKER_SECRETS < ~/ranger/worker.env
 ```
 
-`SUBDOMAIN` is your account's workers.dev subdomain. GitHub secrets cannot be
-read back, so keep the files as the source and set the secrets again after
-each change. To deploy a changed value without a code change, rerun the
-latest CI run on `main`.
+GitHub secrets cannot be read back, so keep the private configuration and
+deployment credentials as the source. Update the relevant repository secret
+after a change. To deploy changed configuration without a code change, rerun
+the latest CI run from a push to `main`.
 
-After the first deploy, read the status:
+Successful deployment confirms upload and activation. CI does not check
+workload health. After deployment, wait for a controller cycle and read the
+status manually. `SUBDOMAIN` is your account's workers.dev subdomain:
 
 ```sh
 curl -H "Authorization: Bearer $STATUS_TOKEN" https://ranger.SUBDOMAIN.workers.dev/status
 ```
 
-Expect HTTP 200. Both nodes are `healthy`, each workload's `current` is its
-preferred node, and `error` is `null`.
+HTTP 200 means a recent controller cycle finished. Inspect the node and
+workload fields as well: for a first enrollment, expect both nodes `healthy`,
+each workload's `current` set to its preferred node, and `error` and
+`transition` set to `null`. During normal operation, traffic may be on the
+fallback node.
+
+### Provision Worker secrets
+
+Keep `worker.env` in a private location as the source for provisioning and
+recovery. Wrangler declares `DNS_API_TOKEN`, `AGENT_TOKEN`, and `STATUS_TOKEN`
+as required; deployment fails if any is missing. Rotate secrets explicitly
+outside CI. Keep `AGENT_TOKEN` synchronized with both agents.
+
+For a brand-new Worker, secrets cannot be set before it exists. Bootstrap it
+once from a checkout with uv, Node.js 22, and installed dependencies:
+
+```sh
+uv sync --locked
+npm ci
+PYTHONPATH=src uv run python scripts/configure-worker.py ~/ranger/cluster.json
+uv run pywrangler deploy --config wrangler.local.jsonc --secrets-file ~/ranger/worker.env
+```
+
+For an existing Worker, render `wrangler.local.jsonc` from the cluster file
+as above, then list secret names without reading their values:
+
+```sh
+npx wrangler secret list --config wrangler.local.jsonc
+```
+
+To provision or rotate its secrets from the private source file:
+
+```sh
+npx wrangler secret bulk ~/ranger/worker.env --config wrangler.local.jsonc
+```
+
+To update one secret, first update its private source, then run
+`npx wrangler secret put NAME --config wrangler.local.jsonc` and enter the
+same value. Secret updates affect the deployed Worker.
+
+When migrating from CI-managed Worker secrets, verify all three names exist
+before changing the workflow. After the first successful deployment with
+inherited secrets, inspect authenticated status and remove the obsolete
+`RANGER_WORKER_SECRETS` and `RANGER_STATUS_URL` GitHub secrets. Keep the
+Cloudflare secrets and the private recovery file.
 
 ### Deploy by hand
 
@@ -183,7 +226,7 @@ with `CLOUDFLARE_API_TOKEN` set:
 
 ```sh
 PYTHONPATH=src uv run python scripts/configure-worker.py ~/ranger/cluster.json
-uv run pywrangler deploy --config wrangler.local.jsonc --secrets-file ~/ranger/worker.env
+uv run pywrangler deploy --config wrangler.local.jsonc
 ```
 
 The renderer writes `wrangler.local.jsonc`. It stops with an error if the
