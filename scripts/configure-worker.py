@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 from ranger.config import cron_schedule, validate_cluster_config
@@ -9,6 +10,7 @@ from ranger.config import cron_schedule, validate_cluster_config
 parser = argparse.ArgumentParser()
 parser.add_argument("cluster", type=Path)
 parser.add_argument("--output", type=Path, default=Path("wrangler.local.jsonc"))
+parser.add_argument("--notifications", type=Path, help="private JSON with from and to addresses")
 args = parser.parse_args()
 config = validate_cluster_config(json.loads(args.cluster.read_text()))
 wrangler = json.loads(Path("wrangler.jsonc").read_text())
@@ -20,6 +22,18 @@ for name, node in config["nodes"].items():
     services.append({"binding": node["agent_binding"], "service_id": service_id})
 wrangler["vpc_services"] = services
 wrangler["vars"] = {"CLUSTER_CONFIG": json.dumps(config)}
+if args.notifications:
+    addresses = json.loads(args.notifications.read_text())
+    if not isinstance(addresses, dict) or set(addresses) != {"from", "to"}:
+        raise SystemExit("notifications must contain only from and to")
+    if any(
+        not isinstance(value, str) or not re.fullmatch(r"[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+", value)
+        for value in addresses.values()
+    ):
+        raise SystemExit("notifications require valid from and to email addresses")
+    wrangler["send_email"] = [{"name": "FAILURE_EMAIL", "destination_address": addresses["to"]}]
+    wrangler["vars"].update(FAILURE_EMAIL_FROM=addresses["from"], FAILURE_EMAIL_TO=addresses["to"])
+    wrangler["secrets"]["required"].append("ALERT_TEST_TOKEN")
 wrangler["triggers"]["crons"] = [cron_schedule(config["policy"])]
 args.output.write_text(json.dumps(wrangler, indent=2) + "\n")
 print(args.output)

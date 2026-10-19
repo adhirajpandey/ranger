@@ -41,71 +41,89 @@ def pending(observation):
 class Reconciler:
     """Runs one check per call. The caller supplies validated configuration and the time."""
 
-    def __init__(self, config, store, io):
+    def __init__(self, config, store, io, notifier=None):
         self.config, self.policy = config, config["policy"]
         self.store, self.io = store, io
+        self.notifier = notifier
+        self.events = []
         self.lock = asyncio.Lock()
 
     async def cycle(self, now):
         # A queued invocation re-reads persisted state after the preceding cycle finishes.
         async with self.lock:
-            state = await self.store.load() or {"nodes": {}, "workloads": {}}
-            nodes, workloads = self.config["nodes"], self.config["workloads"]
-            health, observed, records = await asyncio.gather(
-                settle({node: self.io.node(node) for node in nodes}),
-                settle(
-                    {
-                        (name, node): self.io.workload(node, name)
-                        for name in workloads
-                        for node in nodes
-                    }
-                ),
-                settle({name: self.io.dns(spec) for name, spec in workloads.items()}),
+            self.events = []
+            failed = True
+            try:
+                await self.reconcile(now)
+                failed = False
+            finally:
+                if self.notifier:
+                    try:
+                        await self.notifier.update(
+                            await self.store.load(), self.events, now, failed=failed
+                        )
+                    except Exception:
+                        # Notification storage or transport failures cannot change cycle results.
+                        event("notification_update_failed")
+
+    def emit(self, name, **fields):
+        event(name, **fields)
+        self.events.append({"event": name, **fields})
+
+    async def reconcile(self, now):
+        state = await self.store.load() or {"nodes": {}, "workloads": {}}
+        nodes, workloads = self.config["nodes"], self.config["workloads"]
+        health, observed, records = await asyncio.gather(
+            settle({node: self.io.node(node) for node in nodes}),
+            settle(
+                {(name, node): self.io.workload(node, name) for name in workloads for node in nodes}
+            ),
+            settle({name: self.io.dns(spec) for name, spec in workloads.items()}),
+        )
+        for node in nodes:
+            result = health[node]
+            if isinstance(result, Exception):
+                result = {"error": describe(result)}
+            node_state = state["nodes"].setdefault(
+                node, {"failures": 0, "status": "unknown", "healthy_since": None}
             )
-            for node in nodes:
-                result = health[node]
-                if isinstance(result, Exception):
-                    result = {"error": describe(result)}
-                node_state = state["nodes"].setdefault(
-                    node, {"failures": 0, "status": "unknown", "healthy_since": None}
-                )
-                available = result.get("node") == node and result.get("docker") is True
-                node_state["available"] = available
-                node_state["observation"] = result
-                previous = node_state["status"]
-                self.update_node(node_state, available, now)
-                if node_state["status"] != previous:
-                    event("node_status", node=node, previous=previous, status=node_state["status"])
+            available = result.get("node") == node and result.get("docker") is True
+            node_state["available"] = available
+            node_state["observation"] = result
+            previous = node_state["status"]
+            self.update_node(node_state, available, now)
+            if node_state["status"] != previous:
+                self.emit("node_status", node=node, previous=previous, status=node_state["status"])
+        await self.store.save(state)
+        for name, spec in workloads.items():
+            w = state["workloads"].setdefault(
+                name,
+                {
+                    "current": None,
+                    "desired": spec["preferred_node"],
+                    "transition": None,
+                    "failures": {},
+                    "preferred_since": None,
+                    "backoff": None,
+                    "error": None,
+                },
+            )
+            observations = {node: observation(observed[name, node]) for node in nodes}
+            # Errors describe this cycle only; the logs keep their history.
+            previous, w["error"] = w["error"], None
+            try:
+                await self.workload(state, name, spec, w, observations, records[name], now)
+            except Exception as exc:
+                w["error"] = describe(exc)
+            if w["error"] and w["error"] != previous:
+                self.emit("workload_error", workload=name, error=w["error"])
+            elif previous and not w["error"]:
+                self.emit("workload_error_cleared", workload=name)
             await self.store.save(state)
-            for name, spec in workloads.items():
-                w = state["workloads"].setdefault(
-                    name,
-                    {
-                        "current": None,
-                        "desired": spec["preferred_node"],
-                        "transition": None,
-                        "failures": {},
-                        "preferred_since": None,
-                        "backoff": None,
-                        "error": None,
-                    },
-                )
-                observations = {node: observation(observed[name, node]) for node in nodes}
-                # Errors describe this cycle only; the logs keep their history.
-                previous, w["error"] = w["error"], None
-                try:
-                    await self.workload(state, name, spec, w, observations, records[name], now)
-                except Exception as exc:
-                    w["error"] = describe(exc)
-                if w["error"] and w["error"] != previous:
-                    event("workload_error", workload=name, error=w["error"])
-                elif previous and not w["error"]:
-                    event("workload_error_cleared", workload=name)
-                await self.store.save(state)
-            state["last_cycle"] = now
-            if not any(w.get("error") for w in state["workloads"].values()):
-                state["last_successful_cycle"] = now
-            await self.store.save(state)
+        state["last_cycle"] = now
+        if not any(w.get("error") for w in state["workloads"].values()):
+            state["last_successful_cycle"] = now
+        await self.store.save(state)
 
     def update_node(self, node, available, now):
         if not available:
@@ -179,7 +197,7 @@ class Reconciler:
             w["error"] = "no eligible destination; DNS unchanged"
             return
         w["desired"] = target
-        event(
+        self.emit(
             "failover_started" if failed else "failback_started",
             workload=name,
             source=routed,
@@ -207,7 +225,7 @@ class Reconciler:
                 reason = "replacement startup or readiness deadline exceeded"
                 w["error"], w["transition"] = reason, None
                 w["backoff"] = {"until": now + self.policy["recovery_stability"], "reason": reason}
-                event("transition_abandoned", workload=name, target=target, reason=reason)
+                self.emit("transition_abandoned", workload=name, target=target, reason=reason)
                 return
             if not target_ready:
                 t["ready_count"] = 0
@@ -246,7 +264,9 @@ class Reconciler:
                     # Reconsider the observed placement next cycle, keeping both copies.
                     w["transition"] = None
                     w["error"] = "destination failed after cutover"
-                    event("transition_abandoned", workload=name, target=target, reason=w["error"])
+                    self.emit(
+                        "transition_abandoned", workload=name, target=target, reason=w["error"]
+                    )
                 return
             # DNS must still point to this target before stopping any previous copy.
             dns = await self.io.dns(spec)
@@ -269,7 +289,7 @@ class Reconciler:
             source_obs = observations[source]
             if stopped(source_obs) and not pending(source_obs):
                 w["transition"] = None
-                event("transition_completed", workload=name, source=source, target=target)
+                self.emit("transition_completed", workload=name, source=source, target=target)
                 return
             await self.store.save(state)
             event("stop_requested", workload=name, node=source)

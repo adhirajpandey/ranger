@@ -209,6 +209,9 @@ status. `error` means Docker or the agent could not be observed.
 | `DNS_API_TOKEN` | Secret | Cloudflare API token with DNS Read and DNS Edit on the workloads' zones |
 | `AGENT_TOKEN` | Secret | The token shared by both agents |
 | `STATUS_TOKEN` | Secret | Bearer token for `GET /status`, at least 32 characters |
+| `FAILURE_EMAIL` | Optional send-email binding | Restricted to the configured verified recipient |
+| `FAILURE_EMAIL_FROM`, `FAILURE_EMAIL_TO` | Optional variables | Sender and recipient from private notification configuration |
+| `ALERT_TEST_TOKEN` | Optional secret | Separate bearer token for `POST /test-email`, at least 32 characters; required when notifications are configured |
 
 All three secret names appear in Wrangler's `secrets.required` declaration.
 Deployment requires them to exist on the Worker or be supplied during initial
@@ -217,7 +220,7 @@ bootstrap. Routine CI deployments inherit existing secrets. See
 
 ### Routes
 
-The Worker has one public route, `GET /status`, with
+The status route is `GET /status`, with
 `Authorization: Bearer STATUS_TOKEN`.
 
 | Status | When |
@@ -225,11 +228,19 @@ The Worker has one public route, `GET /status`, with
 | 200 | The last cycle finished within three check intervals |
 | 503 | No cycle has finished yet, or the last one is older than three check intervals |
 | 401 | The token is missing or wrong |
-| 404 | Any other method or path |
+| 404 | Unsupported method or path |
 | 500 | `STATUS_TOKEN` is missing or shorter than 32 characters |
 
 The cron trigger runs one cycle through an internal Durable Object route that
 the public Worker does not forward.
+
+`POST /test-email` requires `Authorization: Bearer ALERT_TEST_TOKEN`. It sends
+a fixed sample to the configured recipient without running reconciliation.
+It returns 200 on acceptance, 401 for missing/wrong authorization, 500 for a
+missing/short test token, 503 when email is disabled, or 502 when delivery fails.
+It ignores request bodies; callers cannot select recipients or message content.
+See [Email incident notifications](operations.md#email-incident-notifications)
+for deployment and retry behavior.
 
 ### Cloudflare requests
 
@@ -253,6 +264,7 @@ targets.
 | `last_successful_cycle` | Last cycle in which no workload reported an error |
 | `nodes` | Node state, keyed by node name |
 | `workloads` | Workload state, keyed by workload name |
+| `notifications` | Delivery summary: `pending_count`, `last_sent_at`, and fixed `delivery_error`; notification storage failures report `notification_state_unavailable` |
 
 Each node has these fields:
 
