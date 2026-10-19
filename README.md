@@ -63,7 +63,7 @@ in-flight requests.
 
 | Path | What it is |
 | --- | --- |
-| `src/entry.py` | Worker and Durable Object entrypoints: cron trigger, `GET /status`, HTTP transport |
+| `src/entry.py` | Worker and Durable Object entrypoints: cron trigger, authenticated status and email test, HTTP transport |
 | `src/ranger/controller.py` | The reconciliation cycle, independent of the Workers runtime |
 | `src/ranger/agent.py` | The node agent: an authenticated HTTP API over Docker Compose |
 | `src/ranger/config.py` | Validation for the controller and agent configurations |
@@ -138,12 +138,14 @@ credentials and provisioned Worker secrets. See
   cycle, the timing, and the limits.
 - [Operate Ranger](docs/operations.md) covers installing the agents, deploying
   the controller, running drills, and rolling back.
+- [Email incident notifications](docs/operations.md#email-incident-notifications)
+  covers optional native email alerts, recovery summaries, and delivery retries.
 - [Reference](docs/reference.md) lists every configuration key, the agent API,
   the status fields, and the log events.
 
 ## Roadmap
 
-- Notifications on failover, failback, and stalled transitions.
+- Independent monitoring of controller execution.
 
 ## License
 

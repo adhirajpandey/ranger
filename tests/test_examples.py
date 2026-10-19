@@ -78,3 +78,60 @@ def test_renderer_writes_bindings_config_and_schedule(tmp_path, interval, schedu
     embedded = json.loads(wrangler["vars"]["CLUSTER_CONFIG"])
     assert "vpc_service_id" not in embedded["nodes"]["node-a"]
     assert validate_cluster_config(embedded) == embedded
+
+
+@pytest.mark.parametrize(
+    "addresses,valid",
+    [
+        ({"from": "ranger@example.com", "to": "owner@example.net"}, True),
+        ({"from": "ranger.alert+test@sub.example.com", "to": "owner@example.net"}, True),
+        ({"from": "ranger@example.com\nBcc: bad@example.com", "to": "owner@example.net"}, False),
+        ({"to": "owner@example.net"}, False),
+        ({"from": "a,b@example.com", "to": "owner@example.net"}, False),
+        ({"from": "ranger@example.com", "to": "a,b@example.net"}, False),
+        ({"from": ".ranger@example.com", "to": "owner@example.net"}, False),
+        ({"from": "ranger..alerts@example.com", "to": "owner@example.net"}, False),
+        ({"from": "ranger@-example.com", "to": "owner@example.net"}, False),
+        ({"from": "ranger@example-.com", "to": "owner@example.net"}, False),
+        ({"from": "ranger@example..com", "to": "owner@example.net"}, False),
+        ({"from": "ranger@example.com:25", "to": "owner@example.net"}, False),
+    ],
+)
+def test_notification_renderer_restricts_recipient_and_requires_test_token(
+    tmp_path, addresses, valid
+):
+    cluster = example("cluster.json")
+    for index, node in enumerate(cluster["nodes"].values()):
+        node["vpc_service_id"] = f"service-{index}"
+    source, notifications, output = [
+        tmp_path / name for name in ("cluster.json", "notifications.json", "out.json")
+    ]
+    source.write_text(json.dumps(cluster))
+    notifications.write_text(json.dumps(addresses))
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/configure-worker.py",
+            str(source),
+            "--notifications",
+            str(notifications),
+            "--output",
+            str(output),
+        ],
+        cwd=ROOT,
+        env={"PYTHONPATH": str(ROOT / "src")},
+        text=True,
+        capture_output=True,
+    )
+    if not valid:
+        assert result.returncode != 0
+        assert not output.exists()
+        return
+    assert result.returncode == 0, result.stderr
+    config = json.loads(output.read_text())
+    assert config["send_email"] == [
+        {"name": "FAILURE_EMAIL", "destination_address": addresses["to"]}
+    ]
+    assert config["vars"]["FAILURE_EMAIL_FROM"] == addresses["from"]
+    assert config["vars"]["FAILURE_EMAIL_TO"] == addresses["to"]
+    assert "ALERT_TEST_TOKEN" in config["secrets"]["required"]

@@ -183,7 +183,8 @@ fallback node.
 
 Keep `worker.env` in a private location as the source for provisioning and
 recovery. Wrangler declares `DNS_API_TOKEN`, `AGENT_TOKEN`, and `STATUS_TOKEN`
-as required; deployment fails if any is missing. Rotate secrets explicitly
+as required, plus `ALERT_TEST_TOKEN` when notifications are configured;
+deployment fails if a required secret is missing. Rotate secrets explicitly
 outside CI. Keep `AGENT_TOKEN` synchronized with both agents.
 
 For a brand-new Worker, secrets cannot be set before it exists. Bootstrap it
@@ -305,3 +306,80 @@ To take Ranger out of control of a workload:
 To remove Ranger entirely, delete the Worker, the VPC services, and the DNS API
 token. Deleting the Worker deletes its stored state, so save the last status
 first if you need it.
+
+## Email incident notifications
+
+Notifications are optional and run inside the controller Worker. They cannot
+report a cron that never executes, a crash before notification handling, or a
+storage failure that prevents incident tracking. Keep external uptime monitoring
+if those failures must raise alerts.
+
+Reuse a verified sender domain and verified destination in your Cloudflare
+account. Do not enable Email Routing on a domain without checking its existing
+mail records. No SMTP credentials or email API token are needed by the Worker.
+
+1. Copy `examples/notifications.json` to a private location and set `from` and
+   `to` to single unquoted ASCII email addresses. These addresses must stay
+   outside the public repository.
+2. Generate a separate random token of at least 32 characters for
+   `ALERT_TEST_TOKEN`, provision it as a Worker secret, and keep it in your
+   private recovery configuration. Do not reuse `STATUS_TOKEN`: status access
+   must not grant permission to send test emails. The secret must exist before
+   the first deployment with notifications enabled. After rendering
+   `wrangler.local.jsonc` as shown below, provision it with:
+
+   ```sh
+   npx wrangler secret put ALERT_TEST_TOKEN --config wrangler.local.jsonc
+   ```
+3. For CI deployment, set repository secret `RANGER_NOTIFICATIONS_CONFIG` to
+   the compact notification JSON. The existing deploy job renders the binding
+   restricted to that destination. For manual rendering, use:
+
+   ```sh
+   PYTHONPATH=src uv run python scripts/configure-worker.py ~/ranger/cluster.json \
+     --notifications ~/ranger/notifications.json
+   ```
+
+4. Deploy through the existing process. After deployment, explicitly call
+   authenticated `POST /test-email` with `ALERT_TEST_TOKEN`. It sends a fixed
+   sample to the configured recipient without running a cycle or changing
+   services. HTTP 200 means Cloudflare accepted the message; verify receipt
+   in the inbox separately. Delivery failure returns 502. Ordinary status
+   credentials cannot call this endpoint.
+
+Confirmed node/application incidents, failover and failback completion, blocked
+recovery, and recovery from alerted conditions generate emails. Node and routed
+application failures use the existing failure threshold; ordinary operation
+errors and caught controller exceptions require two consecutive failing cycles.
+Abandoned transitions alert immediately. Transitions still running after the
+startup deadline, drain period, and two further check intervals are considered
+stalled; two consecutive stalled observations raise an alert. Node recovery uses the existing
+stability period. Healthy cycles and stopped standby copies are silent.
+
+Emails combine changes from one cycle and contain incident IDs, UTC time,
+component names, placement, and fixed error codes. They exclude arbitrary
+exceptions, HTTP response bodies, and credentials. Incident codes such as
+`failover_in_progress`, `no_eligible_destination`, `startup_timeout`, and
+`cleanup_blocked` describe the action or obstacle. Read authenticated status and
+Worker logs for diagnostics.
+
+Notification state lives separately from controller state in the existing Durable
+Object. Reconciliation is saved before delivery; one email attempt waits at most
+five seconds. Failed delivery retries after 1, 5, 15, then every 30 minutes, on
+subsequent controller cycles. New changes respect an existing retry delay.
+Pending changes coalesce per component, including recovery before delivery;
+there is no unbounded event queue. A crash after Cloudflare accepts a message but
+before acknowledgement is saved can produce a duplicate. Acceptance does not
+guarantee inbox delivery.
+
+`GET /status` includes a `notifications` summary with `pending_count`,
+`last_sent_at`, and `delivery_error`. Notification errors do not change controller
+health timestamps or failover results. Logs use `notification_email_sent`,
+`notification_delivery_failed`, and `notification_update_failed` without raw
+provider errors.
+
+To disable sending, remove `RANGER_NOTIFICATIONS_CONFIG` from CI configuration
+(or omit `--notifications` for manual rendering) and redeploy. The binding and
+test-token requirement are removed; existing controller state is preserved.
+Notification state is retained, so re-enabling resumes pending delivery and
+reconciles incidents against the next complete cycle.
