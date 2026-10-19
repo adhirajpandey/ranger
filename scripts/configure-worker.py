@@ -26,11 +26,13 @@ if args.notifications:
     addresses = json.loads(args.notifications.read_text())
     if not isinstance(addresses, dict) or set(addresses) != {"from", "to"}:
         raise SystemExit("notifications must contain only from and to")
+    atom = r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+"
+    label = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    address = re.compile(rf"{atom}(?:\.{atom})*@{label}(?:\.{label})+")
     if any(
-        not isinstance(value, str) or not re.fullmatch(r"[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+", value)
-        for value in addresses.values()
+        not isinstance(value, str) or not address.fullmatch(value) for value in addresses.values()
     ):
-        raise SystemExit("notifications require valid from and to email addresses")
+        raise SystemExit("notifications require unquoted ASCII from and to email addresses")
     wrangler["send_email"] = [{"name": "FAILURE_EMAIL", "destination_address": addresses["to"]}]
     wrangler["vars"].update(FAILURE_EMAIL_FROM=addresses["from"], FAILURE_EMAIL_TO=addresses["to"])
     wrangler["secrets"]["required"].append("ALERT_TEST_TOKEN")

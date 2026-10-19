@@ -183,7 +183,8 @@ fallback node.
 
 Keep `worker.env` in a private location as the source for provisioning and
 recovery. Wrangler declares `DNS_API_TOKEN`, `AGENT_TOKEN`, and `STATUS_TOKEN`
-as required; deployment fails if any is missing. Rotate secrets explicitly
+as required, plus `ALERT_TEST_TOKEN` when notifications are configured;
+deployment fails if a required secret is missing. Rotate secrets explicitly
 outside CI. Keep `AGENT_TOKEN` synchronized with both agents.
 
 For a brand-new Worker, secrets cannot be set before it exists. Bootstrap it
@@ -318,11 +319,18 @@ account. Do not enable Email Routing on a domain without checking its existing
 mail records. No SMTP credentials or email API token are needed by the Worker.
 
 1. Copy `examples/notifications.json` to a private location and set `from` and
-   `to`. These addresses must stay outside the public repository.
+   `to` to single unquoted ASCII email addresses. These addresses must stay
+   outside the public repository.
 2. Generate a separate random token of at least 32 characters for
    `ALERT_TEST_TOKEN`, provision it as a Worker secret, and keep it in your
    private recovery configuration. Do not reuse `STATUS_TOKEN`: status access
-   must not grant permission to send test emails.
+   must not grant permission to send test emails. The secret must exist before
+   the first deployment with notifications enabled. After rendering
+   `wrangler.local.jsonc` as shown below, provision it with:
+
+   ```sh
+   npx wrangler secret put ALERT_TEST_TOKEN --config wrangler.local.jsonc
+   ```
 3. For CI deployment, set repository secret `RANGER_NOTIFICATIONS_CONFIG` to
    the compact notification JSON. The existing deploy job renders the binding
    restricted to that destination. For manual rendering, use:

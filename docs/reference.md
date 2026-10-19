@@ -213,7 +213,9 @@ status. `error` means Docker or the agent could not be observed.
 | `FAILURE_EMAIL_FROM`, `FAILURE_EMAIL_TO` | Optional variables | Sender and recipient from private notification configuration |
 | `ALERT_TEST_TOKEN` | Optional secret | Separate bearer token for `POST /test-email`, at least 32 characters; required when notifications are configured |
 
-All three secret names appear in Wrangler's `secrets.required` declaration.
+Wrangler's `secrets.required` declaration always includes `DNS_API_TOKEN`,
+`AGENT_TOKEN`, and `STATUS_TOKEN`. It also includes `ALERT_TEST_TOKEN` when
+notifications are configured.
 Deployment requires them to exist on the Worker or be supplied during initial
 bootstrap. Routine CI deployments inherit existing secrets. See
 [Provision Worker secrets](operations.md#provision-worker-secrets).

@@ -81,14 +81,25 @@ def test_renderer_writes_bindings_config_and_schedule(tmp_path, interval, schedu
 
 
 @pytest.mark.parametrize(
-    "addresses",
+    "addresses,valid",
     [
-        {"from": "ranger@example.com", "to": "owner@example.net"},
-        {"from": "ranger@example.com\nBcc: bad@example.com", "to": "owner@example.net"},
-        {"to": "owner@example.net"},
+        ({"from": "ranger@example.com", "to": "owner@example.net"}, True),
+        ({"from": "ranger.alert+test@sub.example.com", "to": "owner@example.net"}, True),
+        ({"from": "ranger@example.com\nBcc: bad@example.com", "to": "owner@example.net"}, False),
+        ({"to": "owner@example.net"}, False),
+        ({"from": "a,b@example.com", "to": "owner@example.net"}, False),
+        ({"from": "ranger@example.com", "to": "a,b@example.net"}, False),
+        ({"from": ".ranger@example.com", "to": "owner@example.net"}, False),
+        ({"from": "ranger..alerts@example.com", "to": "owner@example.net"}, False),
+        ({"from": "ranger@-example.com", "to": "owner@example.net"}, False),
+        ({"from": "ranger@example-.com", "to": "owner@example.net"}, False),
+        ({"from": "ranger@example..com", "to": "owner@example.net"}, False),
+        ({"from": "ranger@example.com:25", "to": "owner@example.net"}, False),
     ],
 )
-def test_notification_renderer_restricts_recipient_and_requires_test_token(tmp_path, addresses):
+def test_notification_renderer_restricts_recipient_and_requires_test_token(
+    tmp_path, addresses, valid
+):
     cluster = example("cluster.json")
     for index, node in enumerate(cluster["nodes"].values()):
         node["vpc_service_id"] = f"service-{index}"
@@ -112,7 +123,7 @@ def test_notification_renderer_restricts_recipient_and_requires_test_token(tmp_p
         text=True,
         capture_output=True,
     )
-    if len(addresses) != 2 or "\n" in addresses["from"]:
+    if not valid:
         assert result.returncode != 0
         assert not output.exists()
         return
