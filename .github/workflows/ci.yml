@@ -45,7 +45,6 @@ jobs:
         run: |
           uv tool install .
           "$(uv tool dir --bin)/ranger-agent" --help
-          "$(uv tool dir --bin)/ranger-preflight" --help
 
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
