@@ -104,8 +104,14 @@ def validate_policy(policy):
 
 def validate_cluster_config(config):
     config = copy.deepcopy(config)
-    check_keys(config, "cluster config", {"nodes", "workloads"}, {"policy"})
+    check_keys(config, "cluster config", {"nodes", "workloads"}, {"policy", "notifications"})
     config["policy"] = validate_policy(config.get("policy", {}))
+    if "notifications" in config:
+        addresses = config["notifications"]
+        check_keys(addresses, "notifications", {"from", "to"})
+        email = re.compile(r"[^@\s]+@[^@\s]+")
+        if not all(isinstance(v, str) and email.fullmatch(v) for v in addresses.values()):
+            raise ValueError("notifications from and to must be email addresses")
     nodes = config["nodes"]
     if len(nodes) != 2:
         raise ValueError("Ranger requires exactly two nodes")

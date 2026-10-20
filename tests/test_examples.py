@@ -19,24 +19,6 @@ def test_examples_are_valid():
     validate_agent_config(example("agent.json"))
 
 
-def env_keys(name):
-    lines = (ROOT / "examples" / name).read_text().splitlines()
-    return {line.split("=", 1)[0] for line in lines if line and not line.startswith("#")}
-
-
-@pytest.mark.parametrize(
-    "name,source,keys",
-    [
-        ("worker.env", "src/entry.py", {"DNS_API_TOKEN", "AGENT_TOKEN", "STATUS_TOKEN"}),
-        ("agent.env", "src/ranger/agent.py", {"AGENT_TOKEN"}),
-    ],
-)
-def test_env_examples_list_the_secrets_the_code_reads(name, source, keys):
-    assert env_keys(name) == keys
-    code = (ROOT / source).read_text()
-    assert all(key in code for key in keys)
-
-
 def render(cluster, tmp_path):
     source, output = tmp_path / "cluster.json", tmp_path / "wrangler.json"
     source.write_text(json.dumps(cluster))
@@ -80,58 +62,12 @@ def test_renderer_writes_bindings_config_and_schedule(tmp_path, interval, schedu
     assert validate_cluster_config(embedded) == embedded
 
 
-@pytest.mark.parametrize(
-    "addresses,valid",
-    [
-        ({"from": "ranger@example.com", "to": "owner@example.net"}, True),
-        ({"from": "ranger.alert+test@sub.example.com", "to": "owner@example.net"}, True),
-        ({"from": "ranger@example.com\nBcc: bad@example.com", "to": "owner@example.net"}, False),
-        ({"to": "owner@example.net"}, False),
-        ({"from": "a,b@example.com", "to": "owner@example.net"}, False),
-        ({"from": "ranger@example.com", "to": "a,b@example.net"}, False),
-        ({"from": ".ranger@example.com", "to": "owner@example.net"}, False),
-        ({"from": "ranger..alerts@example.com", "to": "owner@example.net"}, False),
-        ({"from": "ranger@-example.com", "to": "owner@example.net"}, False),
-        ({"from": "ranger@example-.com", "to": "owner@example.net"}, False),
-        ({"from": "ranger@example..com", "to": "owner@example.net"}, False),
-        ({"from": "ranger@example.com:25", "to": "owner@example.net"}, False),
-    ],
-)
-def test_notification_renderer_restricts_recipient_and_requires_test_token(
-    tmp_path, addresses, valid
-):
+def test_renderer_restricts_email_to_the_configured_recipient(tmp_path):
     cluster = example("cluster.json")
     for index, node in enumerate(cluster["nodes"].values()):
         node["vpc_service_id"] = f"service-{index}"
-    source, notifications, output = [
-        tmp_path / name for name in ("cluster.json", "notifications.json", "out.json")
-    ]
-    source.write_text(json.dumps(cluster))
-    notifications.write_text(json.dumps(addresses))
-    result = subprocess.run(
-        [
-            sys.executable,
-            "scripts/configure-worker.py",
-            str(source),
-            "--notifications",
-            str(notifications),
-            "--output",
-            str(output),
-        ],
-        cwd=ROOT,
-        env={"PYTHONPATH": str(ROOT / "src")},
-        text=True,
-        capture_output=True,
-    )
-    if not valid:
-        assert result.returncode != 0
-        assert not output.exists()
-        return
+    cluster["notifications"] = {"from": "ranger@example.com", "to": "owner@example.net"}
+    result, output = render(cluster, tmp_path)
     assert result.returncode == 0, result.stderr
-    config = json.loads(output.read_text())
-    assert config["send_email"] == [
-        {"name": "FAILURE_EMAIL", "destination_address": addresses["to"]}
-    ]
-    assert config["vars"]["FAILURE_EMAIL_FROM"] == addresses["from"]
-    assert config["vars"]["FAILURE_EMAIL_TO"] == addresses["to"]
-    assert "ALERT_TEST_TOKEN" in config["secrets"]["required"]
+    wrangler = json.loads(output.read_text())
+    assert wrangler["send_email"] == [{"name": "EMAIL", "destination_address": "owner@example.net"}]

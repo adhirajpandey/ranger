@@ -1,4 +1,4 @@
-"""Cloudflare entrypoints for authenticated status and email verification."""
+"""Cloudflare entrypoints: the cron trigger, authenticated status, and a test email."""
 
 import asyncio
 import hmac
@@ -14,8 +14,7 @@ from workers import DurableObject, Request, Response, WorkerEntrypoint
 
 from ranger.cloudflare import CloudflareIO
 from ranger.config import validate_cluster_config
-from ranger.controller import Reconciler, describe, event
-from ranger.notifications import Notifications, notification_health
+from ranger.controller import Notifier, Reconciler, describe, event
 
 # The single controller instance. Renaming it starts a new, empty controller state.
 CLUSTER_NAME = "ranger-v1"
@@ -42,23 +41,14 @@ class Cluster(DurableObject):
         self.store = DurableStore(ctx.storage)
         self.config = validate_cluster_config(json.loads(env.CLUSTER_CONFIG))
         io = CloudflareIO(self.config, self.request, env.DNS_API_TOKEN, env.AGENT_TOKEN)
-        self.notification_store = DurableStore(ctx.storage, "notifications")
-        enabled = getattr(env, "FAILURE_EMAIL", None) is not None
-        notifier = (
-            Notifications(self.config, self.notification_store, self.send_email)
-            if enabled
-            else None
-        )
+        notifier = None
+        if "notifications" in self.config:
+            notifier = Notifier(DurableStore(ctx.storage, "notifications"), self.send_email)
         self.reconciler = Reconciler(self.config, self.store, io, notifier)
 
     async def send_email(self, subject, text):
-        message = {
-            "from": self.env.FAILURE_EMAIL_FROM,
-            "to": self.env.FAILURE_EMAIL_TO,
-            "subject": subject,
-            "text": text,
-        }
-        await self.env.FAILURE_EMAIL.send(to_js(message, dict_converter=Object.fromEntries))
+        message = {**self.config["notifications"], "subject": subject, "text": text}
+        await self.env.EMAIL.send(to_js(message, dict_converter=Object.fromEntries))
 
     async def request(
         self, url, method="GET", headers=None, body=None, binding=None, status_only=False
@@ -94,7 +84,7 @@ class Cluster(DurableObject):
 
     async def fetch(self, request):
         if request.method == "POST" and urlsplit(request.url).path == "/test-email":
-            if getattr(self.env, "FAILURE_EMAIL", None) is None:
+            if "notifications" not in self.config:
                 return Response("email notifications are disabled", status=503)
             try:
                 await asyncio.wait_for(
@@ -117,11 +107,6 @@ class Cluster(DurableObject):
                 return Response("cycle failed", status=500)
             return Response("cycle complete")
         state = await self.store.load() or {"status": "not initialized"}
-        if getattr(self, "notification_store", None) is not None:
-            try:
-                state["notifications"] = notification_health(await self.notification_store.load())
-            except Exception:
-                state["notifications"] = {"delivery_error": "notification_state_unavailable"}
         # A stalled controller answers 503, so a plain uptime check notices it.
         stale_after = STALE_INTERVALS * self.config["policy"]["check_interval"]
         fresh = time.time() - state.get("last_cycle", 0) <= stale_after
@@ -137,10 +122,9 @@ class Default(WorkerEntrypoint):
         path = urlsplit(request.url).path
         if (request.method, path) not in {("GET", "/status"), ("POST", "/test-email")}:
             return Response("not found", status=404)
-        key = "ALERT_TEST_TOKEN" if path == "/test-email" else "STATUS_TOKEN"
-        token = str(getattr(self.env, key, ""))
+        token = str(getattr(self.env, "STATUS_TOKEN", ""))
         if len(token) < 32:
-            event("auth_token_invalid", purpose=key)
+            event("status_token_invalid")
             return Response("authentication token is not configured", status=500)
         provided = request.headers.get("Authorization") or ""
         if not hmac.compare_digest(provided.encode(), f"Bearer {token}".encode()):

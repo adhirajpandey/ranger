@@ -42,10 +42,7 @@ jobs:
         run: uv run pywrangler deploy --dry-run
 
       - name: Install the agent as a uv tool
-        run: |
-          uv tool install .
-          "$(uv tool dir --bin)/ranger-agent" --help
-          "$(uv tool dir --bin)/ranger-preflight" --help
+        run: uv tool install . && "$(uv tool dir --bin)/ranger-agent" --help
 
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -68,15 +65,9 @@ jobs:
       - name: Configure the Worker
         env:
           CLUSTER_CONFIG: ${{ secrets.RANGER_CLUSTER_CONFIG }}
-          NOTIFICATIONS_CONFIG: ${{ secrets.RANGER_NOTIFICATIONS_CONFIG }}
         run: |
           printf '%s\n' "$CLUSTER_CONFIG" > "$RUNNER_TEMP/cluster.json"
-          args=()
-          if [ -n "$NOTIFICATIONS_CONFIG" ]; then
-            printf '%s\n' "$NOTIFICATIONS_CONFIG" > "$RUNNER_TEMP/notifications.json"
-            args+=(--notifications "$RUNNER_TEMP/notifications.json")
-          fi
-          PYTHONPATH=src uv run python scripts/configure-worker.py "$RUNNER_TEMP/cluster.json" "${args[@]}"
+          PYTHONPATH=src uv run python scripts/configure-worker.py "$RUNNER_TEMP/cluster.json"
 
       - name: Deploy the Worker
         env:

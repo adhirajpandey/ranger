@@ -4,9 +4,6 @@ These guides set up Ranger on two hosts, deploy the controller, watch it, test
 a failover, and remove it again. The [reference](reference.md) lists every key
 and field that the steps mention.
 
-To enroll another service in an existing installation, follow
-[Add a workload](add-workload.md).
-
 ## Before you start
 
 You need:
@@ -134,13 +131,9 @@ Do this once:
 
 ### Deploy from GitHub Actions
 
-CI validates pull requests. On every push to `main`, a separate deploy job
-runs after the checks pass. It renders the Wrangler configuration and deploys
-with the Worker's existing secrets. Missing credentials fail the deploy job,
-including in an unconfigured fork.
-
-Before the first CI deployment, follow [Provision Worker secrets](#provision-worker-secrets).
-Keep Worker secret values outside GitHub Actions.
+On every push to `main`, CI deploys the Worker after the checks pass, keeping
+the Worker's existing secrets. Before the first CI deployment, follow
+[Provision Worker secrets](#provision-worker-secrets).
 
 Create an API token for the deploy with Workers Scripts Edit, Connectivity
 Directory Read, and Connectivity Directory Bind on the account. Without
@@ -160,35 +153,27 @@ gh secret set CLOUDFLARE_ACCOUNT_ID
 jq -c . ~/ranger/cluster.json | gh secret set RANGER_CLUSTER_CONFIG
 ```
 
-GitHub secrets cannot be read back, so keep the private configuration and
-deployment credentials as the source. Update the relevant repository secret
-after a change. To deploy changed configuration without a code change, rerun
-the latest CI run from a push to `main`.
+GitHub secrets cannot be read back, so keep the private files as the source.
+To deploy changed configuration without a code change, rerun the latest CI run
+on `main`.
 
-Successful deployment confirms upload and activation. CI does not check
-workload health. After deployment, wait for a controller cycle and read the
-status manually. `SUBDOMAIN` is your account's workers.dev subdomain:
+CI does not check workload health. After a deployment, wait for a cycle and
+read the status. `SUBDOMAIN` is your account's workers.dev subdomain:
 
 ```sh
 curl -H "Authorization: Bearer $STATUS_TOKEN" https://ranger.SUBDOMAIN.workers.dev/status
 ```
 
-HTTP 200 means a recent controller cycle finished. Inspect the node and
-workload fields as well: for a first enrollment, expect both nodes `healthy`,
-each workload's `current` set to its preferred node, and `error` and
-`transition` set to `null`. During normal operation, traffic may be on the
-fallback node.
+HTTP 200 means a recent cycle finished, not that every workload is healthy.
+For a first enrollment, expect both nodes `healthy`, each workload's `current`
+set to its preferred node, and `error` and `transition` set to `null`.
 
 ### Provision Worker secrets
 
 Keep `worker.env` in a private location as the source for provisioning and
-recovery. Wrangler declares `DNS_API_TOKEN`, `AGENT_TOKEN`, and `STATUS_TOKEN`
-as required, plus `ALERT_TEST_TOKEN` when notifications are configured;
-deployment fails if a required secret is missing. Rotate secrets explicitly
-outside CI. Keep `AGENT_TOKEN` synchronized with both agents.
-
-For a brand-new Worker, secrets cannot be set before it exists. Bootstrap it
-once from a checkout with uv, Node.js 22, and installed dependencies:
+recovery. Deployment fails if `DNS_API_TOKEN`, `AGENT_TOKEN`, or `STATUS_TOKEN`
+is missing on the Worker, and routine deployments inherit them. A brand-new
+Worker has no secrets yet, so bootstrap it once from a checkout:
 
 ```sh
 uv sync --locked
@@ -197,28 +182,9 @@ PYTHONPATH=src uv run python scripts/configure-worker.py ~/ranger/cluster.json
 uv run pywrangler deploy --config wrangler.local.jsonc --secrets-file ~/ranger/worker.env
 ```
 
-For an existing Worker, render `wrangler.local.jsonc` from the cluster file
-as above, then list secret names without reading their values:
-
-```sh
-npx wrangler secret list --config wrangler.local.jsonc
-```
-
-To provision or rotate its secrets from the private source file:
-
-```sh
-npx wrangler secret bulk ~/ranger/worker.env --config wrangler.local.jsonc
-```
-
-To update one secret, first update its private source, then run
-`npx wrangler secret put NAME --config wrangler.local.jsonc` and enter the
-same value. Secret updates affect the deployed Worker.
-
-When migrating from CI-managed Worker secrets, verify all three names exist
-before changing the workflow. After the first successful deployment with
-inherited secrets, inspect authenticated status and remove the obsolete
-`RANGER_WORKER_SECRETS` and `RANGER_STATUS_URL` GitHub secrets. Keep the
-Cloudflare secrets and the private recovery file.
+To rotate secrets later, update `worker.env` and run
+`npx wrangler secret bulk ~/ranger/worker.env --config wrangler.local.jsonc`.
+Keep `AGENT_TOKEN` synchronized with both agents.
 
 ### Deploy by hand
 
@@ -260,6 +226,30 @@ sudo systemctl restart ranger-agent@USER
 The controller upgrades itself: every merge to `main` deploys it. It keeps its
 state across deployments. Agents are never upgraded by CI, so upgrade them by
 hand after a change to the agent or its API.
+
+## Add a workload
+
+To enroll another service in a running installation:
+
+1. Follow [Prepare a workload](#prepare-a-workload) on both hosts. Its start
+   command uses `--no-deps`, so dependencies must already be available on both.
+2. Add the workload to both agent configurations under the same name, restart
+   both agents, and check that the preferred copy reports `ready` and the
+   standby `stopped`:
+
+   ```sh
+   sudo systemctl restart ranger-agent@USER
+   curl -H "Authorization: Bearer $AGENT_TOKEN" \
+     http://127.0.0.1:6720/workloads/example-app/health
+   ```
+
+   Restarting an agent does not restart application containers.
+3. Add the workload to the private cluster file. Make sure the DNS token can
+   edit the new record's zone.
+4. Deploy: update `RANGER_CLUSTER_CONFIG` and rerun the latest CI run on
+   `main`, or [deploy by hand](#deploy-by-hand).
+5. After a cycle, check `/status`: `current` is the preferred node, and
+   `transition` and `error` are `null`.
 
 ## Run a failover drill
 
@@ -307,79 +297,33 @@ To remove Ranger entirely, delete the Worker, the VPC services, and the DNS API
 token. Deleting the Worker deletes its stored state, so save the last status
 first if you need it.
 
-## Email incident notifications
+## Email notifications
 
-Notifications are optional and run inside the controller Worker. They cannot
-report a cron that never executes, a crash before notification handling, or a
-storage failure that prevents incident tracking. Keep external uptime monitoring
-if those failures must raise alerts.
+Ranger can email the events it logs as notable: node status changes, failover
+and failback starts and completions, abandoned transitions, and new or cleared
+workload errors. Each cycle's events go out as one email. If sending fails, the
+lines are kept and go out with the next email. Notifications run inside the
+controller, so keep an uptime monitor on `/status` for a controller that stops
+running.
 
-Reuse a verified sender domain and verified destination in your Cloudflare
-account. Do not enable Email Routing on a domain without checking its existing
-mail records. No SMTP credentials or email API token are needed by the Worker.
+Ranger sends through a Cloudflare send-email binding, so it needs no SMTP
+credentials. Use a sender domain and recipient that are already verified in
+your Cloudflare account.
 
-1. Copy `examples/notifications.json` to a private location and set `from` and
-   `to` to single unquoted ASCII email addresses. These addresses must stay
-   outside the public repository.
-2. Generate a separate random token of at least 32 characters for
-   `ALERT_TEST_TOKEN`, provision it as a Worker secret, and keep it in your
-   private recovery configuration. Do not reuse `STATUS_TOKEN`: status access
-   must not grant permission to send test emails. The secret must exist before
-   the first deployment with notifications enabled. After rendering
-   `wrangler.local.jsonc` as shown below, provision it with:
+1. Add the addresses to the private cluster file:
 
-   ```sh
-   npx wrangler secret put ALERT_TEST_TOKEN --config wrangler.local.jsonc
-   ```
-3. For CI deployment, set repository secret `RANGER_NOTIFICATIONS_CONFIG` to
-   the compact notification JSON. The existing deploy job renders the binding
-   restricted to that destination. For manual rendering, use:
-
-   ```sh
-   PYTHONPATH=src uv run python scripts/configure-worker.py ~/ranger/cluster.json \
-     --notifications ~/ranger/notifications.json
+   ```json
+   "notifications": {"from": "ranger@example.com", "to": "owner@example.net"}
    ```
 
-4. Deploy through the existing process. After deployment, explicitly call
-   authenticated `POST /test-email` with `ALERT_TEST_TOKEN`. It sends a fixed
-   sample to the configured recipient without running a cycle or changing
-   services. HTTP 200 means Cloudflare accepted the message; verify receipt
-   in the inbox separately. Delivery failure returns 502. Ordinary status
-   credentials cannot call this endpoint.
+2. Deploy. The rendered binding can send only to `to`.
+3. Send a test email:
 
-Confirmed node/application incidents, failover and failback completion, blocked
-recovery, and recovery from alerted conditions generate emails. Node and routed
-application failures use the existing failure threshold; ordinary operation
-errors and caught controller exceptions require two consecutive failing cycles.
-Abandoned transitions alert immediately. Transitions still running after the
-startup deadline, drain period, and two further check intervals are considered
-stalled; two consecutive stalled observations raise an alert. Node recovery uses the existing
-stability period. Healthy cycles and stopped standby copies are silent.
+   ```sh
+   curl -X POST -H "Authorization: Bearer $STATUS_TOKEN" \
+     https://ranger.SUBDOMAIN.workers.dev/test-email
+   ```
 
-Emails combine changes from one cycle and contain incident IDs, UTC time,
-component names, placement, and fixed error codes. They exclude arbitrary
-exceptions, HTTP response bodies, and credentials. Incident codes such as
-`failover_in_progress`, `no_eligible_destination`, `startup_timeout`, and
-`cleanup_blocked` describe the action or obstacle. Read authenticated status and
-Worker logs for diagnostics.
+   HTTP 200 means Cloudflare accepted the message. Check the inbox.
 
-Notification state lives separately from controller state in the existing Durable
-Object. Reconciliation is saved before delivery; one email attempt waits at most
-five seconds. Failed delivery retries after 1, 5, 15, then every 30 minutes, on
-subsequent controller cycles. New changes respect an existing retry delay.
-Pending changes coalesce per component, including recovery before delivery;
-there is no unbounded event queue. A crash after Cloudflare accepts a message but
-before acknowledgement is saved can produce a duplicate. Acceptance does not
-guarantee inbox delivery.
-
-`GET /status` includes a `notifications` summary with `pending_count`,
-`last_sent_at`, and `delivery_error`. Notification errors do not change controller
-health timestamps or failover results. Logs use `notification_email_sent`,
-`notification_delivery_failed`, and `notification_update_failed` without raw
-provider errors.
-
-To disable sending, remove `RANGER_NOTIFICATIONS_CONFIG` from CI configuration
-(or omit `--notifications` for manual rendering) and redeploy. The binding and
-test-token requirement are removed; existing controller state is preserved.
-Notification state is retained, so re-enabling resumes pending delivery and
-reconciles incidents against the next complete cycle.
+To turn notifications off, remove the `notifications` key and deploy.

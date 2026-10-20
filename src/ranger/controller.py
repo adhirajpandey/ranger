@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from datetime import datetime, timezone
 
 
 def event(name, **fields):
@@ -38,6 +39,30 @@ def pending(observation):
     return bool(observation.get("operation", {}).get("pending"))
 
 
+class Notifier:
+    """Emails a cycle's notable events. Undelivered lines go out with the next email."""
+
+    def __init__(self, store, send):
+        self.store, self.send = store, send
+
+    async def deliver(self, events, now):
+        timestamp = datetime.fromtimestamp(now, timezone.utc).isoformat()
+        lines = [
+            " ".join([timestamp, e["event"], *(f"{k}={v}" for k, v in e.items() if k != "event")])
+            for e in events
+        ]
+        pending = (await self.store.load() or []) + lines
+        if not pending:
+            return
+        try:
+            await asyncio.wait_for(self.send("Ranger events", "\n".join(pending)), 5)
+            pending = []
+            event("notification_sent")
+        except Exception:
+            event("notification_failed")
+        await self.store.save(pending[-100:])
+
+
 class Reconciler:
     """Runs one check per call. The caller supplies validated configuration and the time."""
 
@@ -52,21 +77,18 @@ class Reconciler:
         # A queued invocation re-reads persisted state after the preceding cycle finishes.
         async with self.lock:
             self.events = []
-            failed = True
             try:
                 await self.reconcile(now)
-                failed = False
             finally:
                 if self.notifier:
                     try:
-                        await self.notifier.update(
-                            await self.store.load(), self.events, now, failed=failed
-                        )
+                        await self.notifier.deliver(self.events, now)
                     except Exception:
-                        # Notification storage or transport failures cannot change cycle results.
-                        event("notification_update_failed")
+                        # Notification failures never change cycle results.
+                        event("notification_failed")
 
     def emit(self, name, **fields):
+        """Log an event that is also worth an email."""
         event(name, **fields)
         self.events.append({"event": name, **fields})
 

@@ -63,8 +63,8 @@ in-flight requests.
 
 | Path | What it is |
 | --- | --- |
-| `src/entry.py` | Worker and Durable Object entrypoints: cron trigger, authenticated status and email test, HTTP transport |
-| `src/ranger/controller.py` | The reconciliation cycle, independent of the Workers runtime |
+| `src/entry.py` | Worker and Durable Object entrypoints: cron trigger, authenticated status, test email, HTTP transport |
+| `src/ranger/controller.py` | The reconciliation cycle and email notifications, independent of the Workers runtime |
 | `src/ranger/agent.py` | The node agent: an authenticated HTTP API over Docker Compose |
 | `src/ranger/config.py` | Validation for the controller and agent configurations |
 | `src/ranger/cloudflare.py` | Adapters for the agents, the DNS API, and the public probe |
@@ -132,14 +132,11 @@ credentials and provisioned Worker secrets. See
 
 ## Documentation
 
-- [Add a workload](docs/add-workload.md) covers enrolling another service in an
-  existing installation, including read-only preflight checks.
 - [How Ranger works](docs/architecture.md) explains the design, the failover
   cycle, the timing, and the limits.
 - [Operate Ranger](docs/operations.md) covers installing the agents, deploying
-  the controller, running drills, and rolling back.
-- [Email incident notifications](docs/operations.md#email-incident-notifications)
-  covers optional native email alerts, recovery summaries, and delivery retries.
+  the controller, adding workloads, email notifications, drills, and rolling
+  back.
 - [Reference](docs/reference.md) lists every configuration key, the agent API,
   the status fields, and the log events.
 
