@@ -152,9 +152,6 @@ failures, and Docker's error output to the systemd journal on each host.
 Docker's error output never leaves the host, because it can contain registry
 credentials.
 
-Optional email notifications use a native Cloudflare send-email binding after
-reconciliation has been saved. Separate Durable Object storage tracks active
-incidents, coalesced pending changes, and retry timing. Notification failures do
-not alter controller results. This reports failures only while controller code
-can execute; it does not replace an independent uptime check. See
-[Email incident notifications](operations.md#email-incident-notifications).
+Optionally, the controller also emails those events. Undelivered lines are kept
+and sent with the next email. See
+[Email notifications](operations.md#email-notifications).

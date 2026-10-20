@@ -19,6 +19,7 @@ Unknown keys are rejected at every level.
 | `nodes` | Yes | Exactly two nodes, keyed by node name |
 | `workloads` | Yes | Workloads, keyed by workload name |
 | `policy` | No | Timing and threshold overrides |
+| `notifications` | No | `from` and `to` email addresses. See [Email notifications](operations.md#email-notifications). |
 
 Node and workload names start with a letter or digit and contain only letters,
 digits, `_`, and `-`.
@@ -102,30 +103,6 @@ and `"no"` leave it stopped.
 
 ## Commands
 
-### `ranger-preflight`
-
-```text
-ranger-preflight --cluster FILE --agent FILE --agent FILE --workload NAME
-                 [--workload NAME ...] [--local-node NODE] [--dns]
-```
-
-Checks a proposed enrollment without changing containers, DNS, or files.
-Exit status is 0 on success and 1 when a check fails.
-
-| Option | Check |
-| --- | --- |
-| `--cluster` | Validates the controller configuration |
-| `--agent` | One configuration per cluster node; checks selected workloads exist in both allowlists and readiness settings match |
-| `--workload` | Selects a workload; repeat to check several |
-| `--local-node` | Inspects local Compose, service existence, one replica, restart policy, loopback TCP port, and locally available image; requires the preferred copy ready and standby stopped |
-| `--dns` | Reads each configured record by ID using `DNS_API_TOKEN`; requires a proxied CNAME for the hostname pointing at the preferred tunnel |
-
-Without `--local-node` or `--dns`, checks use configuration files only.
-Local checks require Docker and the Compose plugin. DNS requests time out
-after five seconds. The command does not verify image versions or CPU
-architectures, dependencies, tunnel routes, cache rules, or loaded agent
-configuration. See [Add a workload](add-workload.md) for those steps.
-
 ### `ranger-agent`
 
 ```text
@@ -159,7 +136,8 @@ PYTHONPATH=src uv run python scripts/configure-worker.py CLUSTER_FILE [--output 
 ```
 
 The script reads `wrangler.jsonc`, adds the VPC service bindings, the
-`CLUSTER_CONFIG` variable, and the cron schedule, and writes the result to
+`CLUSTER_CONFIG` variable, the cron schedule, and the email binding when
+notifications are configured, and writes the result to
 `wrangler.local.jsonc` by default. Git ignores that file. The script does not
 call Cloudflare.
 
@@ -209,21 +187,16 @@ status. `error` means Docker or the agent could not be observed.
 | `DNS_API_TOKEN` | Secret | Cloudflare API token with DNS Read and DNS Edit on the workloads' zones |
 | `AGENT_TOKEN` | Secret | The token shared by both agents |
 | `STATUS_TOKEN` | Secret | Bearer token for `GET /status`, at least 32 characters |
-| `FAILURE_EMAIL` | Optional send-email binding | Restricted to the configured verified recipient |
-| `FAILURE_EMAIL_FROM`, `FAILURE_EMAIL_TO` | Optional variables | Sender and recipient from private notification configuration |
-| `ALERT_TEST_TOKEN` | Optional secret | Separate bearer token for `POST /test-email`, at least 32 characters; required when notifications are configured |
+| `EMAIL` | Optional send-email binding | Restricted to the `notifications.to` address |
 
-Wrangler's `secrets.required` declaration always includes `DNS_API_TOKEN`,
-`AGENT_TOKEN`, and `STATUS_TOKEN`. It also includes `ALERT_TEST_TOKEN` when
-notifications are configured.
-Deployment requires them to exist on the Worker or be supplied during initial
-bootstrap. Routine CI deployments inherit existing secrets. See
+Wrangler requires the three secrets to exist on the Worker. Routine CI
+deployments inherit them. See
 [Provision Worker secrets](operations.md#provision-worker-secrets).
 
 ### Routes
 
-The status route is `GET /status`, with
-`Authorization: Bearer STATUS_TOKEN`.
+Both routes require `Authorization: Bearer STATUS_TOKEN`. `GET /status`
+returns the controller state:
 
 | Status | When |
 | --- | --- |
@@ -236,13 +209,9 @@ The status route is `GET /status`, with
 The cron trigger runs one cycle through an internal Durable Object route that
 the public Worker does not forward.
 
-`POST /test-email` requires `Authorization: Bearer ALERT_TEST_TOKEN`. It sends
-a fixed sample to the configured recipient without running reconciliation.
-It returns 200 on acceptance, 401 for missing/wrong authorization, 500 for a
-missing/short test token, 503 when email is disabled, or 502 when delivery fails.
-It ignores request bodies; callers cannot select recipients or message content.
-See [Email incident notifications](operations.md#email-incident-notifications)
-for deployment and retry behavior.
+`POST /test-email` sends a fixed message to the configured recipient without
+running a cycle. It returns 200 when Cloudflare accepts the message, 502 when
+sending fails, and 503 when notifications are not configured.
 
 ### Cloudflare requests
 
@@ -266,7 +235,6 @@ targets.
 | `last_successful_cycle` | Last cycle in which no workload reported an error |
 | `nodes` | Node state, keyed by node name |
 | `workloads` | Workload state, keyed by workload name |
-| `notifications` | Delivery summary: `pending_count`, `last_sent_at`, and fixed `delivery_error`; notification storage failures report `notification_state_unavailable` |
 
 Each node has these fields:
 
@@ -323,6 +291,13 @@ fields below.
 | `workload_error_cleared` | `workload` | A workload's error has cleared |
 | `cycle_failed` | `error` | A cycle failed outside any single workload |
 | `status_token_invalid` | | `STATUS_TOKEN` is missing or too short |
+| `notification_sent` | | An email with the cycle's events was accepted |
+| `notification_failed` | | Sending failed. The lines go out with the next email. |
+| `test_email_sent`, `test_email_failed` | | Result of `POST /test-email` |
+
+With notifications configured, `node_status`, `failover_started`,
+`failback_started`, `transition_completed`, `transition_abandoned`,
+`workload_error`, and `workload_error_cleared` are also emailed.
 
 The agent logs to standard error, which systemd writes to the journal. Read it
 with `journalctl -u ranger-agent@USER`.
