@@ -1,8 +1,14 @@
+import json
 from unittest.mock import AsyncMock
 
+import pytest
 from test_controller import Cluster, Store
 
-from ranger.controller import Notifier
+from ranger.controller import Notifier, notification_message
+
+
+def payload(text):
+    return json.loads(text.split("Debug payload (JSON)\n", 1)[1])
 
 
 async def test_emails_notable_events_but_not_quiet_cycles():
@@ -15,23 +21,65 @@ async def test_emails_notable_events_but_not_quiet_cycles():
     c.io.healthy["white-box"] = False
     await c.tick(6)
     sent = "\n".join(call.args[1] for call in send.await_args_list)
-    assert "failover_started workload=memes source=white-box target=black-box" in sent
-    assert "transition_completed workload=memes" in sent
+    assert "memes failed repeated checks on " in sent
+    assert "memes has moved from " in sent
+    events = [e for call in send.await_args_list for e in payload(call.args[1])]
+    assert "failover_started" in [e["event"] for e in events]
+    assert "transition_completed" in [e["event"] for e in events]
     assert "start_requested" not in sent
 
 
 async def test_undelivered_events_go_out_with_the_next_email():
     store, send = Store(), AsyncMock(side_effect=RuntimeError("provider down"))
     notifier = Notifier(store, send)
-    await notifier.deliver([{"event": "node_status", "node": "a", "status": "unhealthy"}], 0)
-    assert store.value == ["1970-01-01T00:00:00+00:00 node_status node=a status=unhealthy"]
+    first = {"event": "node_status", "node": "a", "status": "unhealthy"}
+    await notifier.deliver([first], 0)
+    assert store.value == [{**first, "timestamp": "1970-01-01T00:00:00+00:00"}]
     send.side_effect = None
     await notifier.deliver([{"event": "workload_error", "workload": "w", "error": "x"}], 60)
-    assert send.await_args.args[1].splitlines() == [
-        "1970-01-01T00:00:00+00:00 node_status node=a status=unhealthy",
-        "1970-01-01T00:01:00+00:00 workload_error workload=w error=x",
+    subject, text = send.await_args.args
+    assert subject == "Ranger: 2 updates"
+    assert "a failed repeated health checks" in text
+    assert "problem managing w: x" in text
+    assert [e["timestamp"] for e in payload(text)] == [
+        "1970-01-01T00:00:00+00:00",
+        "1970-01-01T00:01:00+00:00",
     ]
     assert store.value == []
+
+
+async def test_legacy_pending_lines_are_preserved():
+    store, send = Store(), AsyncMock()
+    store.value = ["1970-01-01T00:00:00+00:00 node_status node=a status=unhealthy"]
+    await Notifier(store, send).deliver([], 60)
+    assert payload(send.await_args.args[1]) == [
+        "1970-01-01T00:00:00+00:00 node_status node=a status=unhealthy"
+    ]
+    assert store.value == []
+
+
+@pytest.mark.parametrize(
+    ("item", "expected"),
+    [
+        ({"event": "node_status", "node": "a", "status": "healthy"}, "a is healthy"),
+        ({"event": "node_status", "node": "a", "status": "recovering"}, "a is responding again"),
+        (
+            {"event": "failback_started", "workload": "w", "source": "a", "target": "b"},
+            "w is moving back from a",
+        ),
+        (
+            {"event": "transition_abandoned", "workload": "w", "target": "b", "reason": "timeout"},
+            "Ranger stopped moving w to b: timeout",
+        ),
+        ({"event": "workload_error_cleared", "workload": "w"}, "previous error for w"),
+        ({"event": "future_event", "detail": "kept"}, "Ranger recorded an update"),
+    ],
+)
+def test_human_summary_precedes_debug_payload(item, expected):
+    subject, text = notification_message([item])
+    assert subject.startswith("Ranger: ")
+    assert expected in text.split("Debug payload", 1)[0]
+    assert payload(text) == [item]
 
 
 async def test_notification_failure_does_not_fail_the_cycle():

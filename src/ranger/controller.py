@@ -43,23 +43,76 @@ def pending(observation):
 SEND_TIMEOUT = 30
 
 
+def notification_summary(item):
+    """Describe an event without requiring the reader to know the log schema."""
+    if isinstance(item, str):
+        # Older deployments persisted preformatted log lines.
+        return "An earlier notification is included in the debug payload."
+    name = item["event"]
+    if name == "node_status":
+        node, status = item["node"], item["status"]
+        if status == "unhealthy":
+            return f"{node} failed repeated health checks and is unavailable for failover."
+        if status == "recovering":
+            return f"{node} is responding again. Ranger is waiting for it to stay healthy."
+        if status == "healthy":
+            return f"{node} is healthy and available for failover."
+        return f"{node} is now {status}."
+    workload = item.get("workload", "Workload")
+    if name == "failover_started":
+        return (
+            f"{workload} failed repeated checks on {item['source']}. "
+            f"Ranger is preparing a replacement on {item['target']}."
+        )
+    if name == "failback_started":
+        return (
+            f"{workload} is moving back from {item['source']} to its preferred host, "
+            f"{item['target']}, after the recovery waiting period."
+        )
+    if name == "transition_completed":
+        return (
+            f"{workload} has moved from {item['source']} to {item['target']}. "
+            "DNS and the public health check passed, and the old copy is stopped."
+        )
+    if name == "transition_abandoned":
+        return f"Ranger stopped moving {workload} to {item['target']}: {item['reason']}."
+    if name == "workload_error":
+        return f"Ranger encountered a problem managing {workload}: {item['error']}."
+    if name == "workload_error_cleared":
+        return f"Ranger no longer reports the previous error for {workload}."
+    return "Ranger recorded an update. See the debug payload for details."
+
+
+def notification_message(items):
+    summaries = [notification_summary(item) for item in items]
+    subject = f"Ranger: {summaries[0]}" if len(items) == 1 else f"Ranger: {len(items)} updates"
+    # Keep subjects on one line even if an adapter supplies a multiline error.
+    subject = " ".join(subject.split())[:160]
+    paragraphs = []
+    for item, summary in zip(items, summaries):
+        timestamp = item.get("timestamp") if isinstance(item, dict) else None
+        if timestamp:
+            timestamp = datetime.fromisoformat(timestamp).strftime("%d %b %Y at %H:%M UTC")
+        paragraphs.append(f"{timestamp}\n{summary}" if timestamp else summary)
+    text = "\n\n".join(paragraphs)
+    return subject, text + "\n\nDebug payload (JSON)\n" + json.dumps(items, indent=2)
+
+
 class Notifier:
-    """Emails a cycle's notable events. Undelivered lines go out with the next email."""
+    """Emails notable events, retaining undelivered events for the next attempt."""
 
     def __init__(self, store, send):
         self.store, self.send = store, send
 
     async def deliver(self, events, now):
         timestamp = datetime.fromtimestamp(now, timezone.utc).isoformat()
-        lines = [
-            " ".join([timestamp, e["event"], *(f"{k}={v}" for k, v in e.items() if k != "event")])
-            for e in events
+        pending = (await self.store.load() or []) + [
+            {**item, "timestamp": timestamp} for item in events
         ]
-        pending = (await self.store.load() or []) + lines
         if not pending:
             return
         try:
-            await asyncio.wait_for(self.send("Ranger events", "\n".join(pending)), SEND_TIMEOUT)
+            await asyncio.wait_for(self.send(*notification_message(pending)), SEND_TIMEOUT)
             pending = []
             event("notification_sent")
         except Exception as exc:

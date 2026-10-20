@@ -301,10 +301,12 @@ first if you need it.
 
 Ranger can email the events it logs as notable: node status changes, failover
 and failback starts and completions, abandoned transitions, and new or cleared
-workload errors. Each cycle's events go out as one email. If sending fails, the
-lines are kept and go out with the next email. Notifications run inside the
-controller, so keep an uptime monitor on `/status` for a controller that stops
-running.
+workload errors. Each cycle's events go out as one plain-text email with a
+descriptive subject, timestamped explanations, and a JSON debug payload at the
+bottom. If sending fails, the events keep their original timestamps and go out
+with the next email. Queued log lines from older versions are preserved in the
+debug payload. Notifications run inside the controller, so keep an uptime
+monitor on `/status` for a controller that stops running.
 
 Ranger sends through a Cloudflare send-email binding, so it needs no SMTP
 credentials. Use a sender domain and recipient that are already verified in

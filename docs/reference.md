@@ -292,7 +292,7 @@ fields below.
 | `cycle_failed` | `error` | A cycle failed outside any single workload |
 | `status_token_invalid` | | `STATUS_TOKEN` is missing or too short |
 | `notification_sent` | | An email with the cycle's events was accepted |
-| `notification_failed` | `error` | Sending failed. The lines go out with the next email. |
+| `notification_failed` | `error` | Sending failed. The events go out with the next email. |
 | `test_email_sent`, `test_email_failed` | `error` on failure | Result of `POST /test-email` |
 
 With notifications configured, `node_status`, `failover_started`,
