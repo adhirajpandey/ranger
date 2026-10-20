@@ -107,6 +107,8 @@ def mutate(change):
             )
         ),
         mutate(lambda c: c["workloads"].update(copy=dict(c["workloads"]["memes"]))),
+        mutate(lambda c: c.update(notifications={"to": "owner@example.net"})),
+        mutate(lambda c: c.update(notifications={"from": "a@b", "to": "x@y\nBcc: z@w"})),
     ],
 )
 def test_invalid_cluster_config(config):

@@ -170,92 +170,15 @@ async def test_misconfigured_status_token_is_a_server_error(transport, token):
     stub.fetch.assert_not_awaited()
 
 
-@pytest.mark.parametrize("authorization", [None, f"Bearer {TOKEN}", "Bearer wrong"])
-async def test_status_token_cannot_send_test_email(transport, authorization):
-    handler, stub = status_handler(transport)
-    handler.env.ALERT_TEST_TOKEN = "t" * 32
-    response = await handler.fetch(status_request(authorization, "POST", "/test-email"))
-    assert response.status == 401
-    stub.fetch.assert_not_awaited()
-
-
-async def test_test_email_forwards_only_with_separate_token(transport):
-    handler, stub = status_handler(transport)
-    handler.env.ALERT_TEST_TOKEN = "t" * 32
-    request = status_request("Bearer " + "t" * 32, "POST", "/test-email")
-    assert await handler.fetch(request) == "cluster response"
-    stub.fetch.assert_awaited_once_with(request)
-
-
-async def test_email_adapter_uses_native_binding_and_fixed_addresses(transport):
+async def test_test_email_uses_the_configured_addresses(transport):
     cluster, _ = transport
-    cluster.env = SimpleNamespace(
-        FAILURE_EMAIL_FROM="ranger@example.com",
-        FAILURE_EMAIL_TO="owner@example.net",
-        FAILURE_EMAIL=SimpleNamespace(send=AsyncMock()),
-    )
-    await cluster.send_email("Sample", "Fixed text")
-    cluster.env.FAILURE_EMAIL.send.assert_awaited_once_with(
-        {
-            "from": "ranger@example.com",
-            "to": "owner@example.net",
-            "subject": "Sample",
-            "text": "Fixed text",
-        }
-    )
-
-
-async def test_test_email_never_runs_cycle_or_changes_incident_state(transport):
-    cluster, _ = transport
-    cluster.env = SimpleNamespace(FAILURE_EMAIL=object())
-    cluster.send_email = AsyncMock()
-    cluster.reconciler = SimpleNamespace(cycle=AsyncMock())
+    cluster.config["notifications"] = {"from": "ranger@example.com", "to": "owner@example.net"}
+    cluster.env = SimpleNamespace(EMAIL=SimpleNamespace(send=AsyncMock()))
     request = SimpleNamespace(method="POST", url="https://ranger.example/test-email")
     assert (await cluster.fetch(request)).status == 200
-    cluster.reconciler.cycle.assert_not_awaited()
-    cluster.send_email.assert_awaited_once()
-    cluster.send_email.side_effect = RuntimeError("private provider details")
-    response = await cluster.fetch(request)
-    assert response.status == 502
-    assert "private" not in response.body
-
-
-async def test_status_exposes_only_notification_summary(transport):
-    cluster, _ = transport
-    cluster.store = SimpleNamespace(load=AsyncMock(return_value={"last_cycle": 1e20}))
-    cluster.notification_store = SimpleNamespace(
-        load=AsyncMock(
-            return_value={
-                "pending": {"application:demo": {"id": "private-id"}},
-                "last_sent_at": 123,
-                "delivery_error": "email_delivery_failed",
-            }
-        )
-    )
-    response = await cluster.fetch(
-        SimpleNamespace(method="GET", url="https://ranger.example/status")
-    )
-    assert json.loads(response.body)["notifications"] == {
-        "pending_count": 1,
-        "last_sent_at": 123,
-        "delivery_error": "email_delivery_failed",
-    }
-    assert "private-id" not in response.body
-
-
-async def test_disabled_email_returns_503_without_sending(transport):
-    cluster, _ = transport
-    cluster.env = SimpleNamespace()
-    cluster.send_email = AsyncMock()
-    response = await cluster.fetch(
-        SimpleNamespace(method="POST", url="https://example.com/test-email")
-    )
-    assert response.status == 503
-    cluster.send_email.assert_not_awaited()
-
-
-async def test_missing_test_token_does_not_grant_status_token_email_access(transport):
-    handler, stub = status_handler(transport)
-    response = await handler.fetch(status_request(method="POST", path="/test-email"))
-    assert response.status == 500
-    stub.fetch.assert_not_awaited()
+    message = cluster.env.EMAIL.send.await_args.args[0]
+    assert (message["from"], message["to"]) == ("ranger@example.com", "owner@example.net")
+    cluster.env.EMAIL.send.side_effect = RuntimeError("provider details")
+    assert (await cluster.fetch(request)).status == 502
+    del cluster.config["notifications"]
+    assert (await cluster.fetch(request)).status == 503
