@@ -39,6 +39,10 @@ def pending(observation):
     return bool(observation.get("operation", {}).get("pending"))
 
 
+# Cloudflare's send-email binding takes about five seconds per message.
+SEND_TIMEOUT = 30
+
+
 class Notifier:
     """Emails a cycle's notable events. Undelivered lines go out with the next email."""
 
@@ -55,11 +59,11 @@ class Notifier:
         if not pending:
             return
         try:
-            await asyncio.wait_for(self.send("Ranger events", "\n".join(pending)), 5)
+            await asyncio.wait_for(self.send("Ranger events", "\n".join(pending)), SEND_TIMEOUT)
             pending = []
             event("notification_sent")
-        except Exception:
-            event("notification_failed")
+        except Exception as exc:
+            event("notification_failed", error=describe(exc)[:200])
         await self.store.save(pending[-100:])
 
 

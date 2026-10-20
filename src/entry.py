@@ -14,7 +14,7 @@ from workers import DurableObject, Request, Response, WorkerEntrypoint
 
 from ranger.cloudflare import CloudflareIO
 from ranger.config import validate_cluster_config
-from ranger.controller import Notifier, Reconciler, describe, event
+from ranger.controller import SEND_TIMEOUT, Notifier, Reconciler, describe, event
 
 # The single controller instance. Renaming it starts a new, empty controller state.
 CLUSTER_NAME = "ranger-v1"
@@ -91,10 +91,10 @@ class Cluster(DurableObject):
                     self.send_email(
                         "Ranger test email", "Ranger email delivery test. No actions taken."
                     ),
-                    5,
+                    SEND_TIMEOUT,
                 )
-            except Exception:
-                event("test_email_failed")
+            except Exception as exc:
+                event("test_email_failed", error=describe(exc)[:200])
                 return Response("email delivery failed", status=502)
             event("test_email_sent")
             return Response("test email accepted")
