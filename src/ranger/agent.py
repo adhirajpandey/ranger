@@ -2,13 +2,12 @@
 
 import argparse
 import hmac
+import http.client
 import json
 import logging
 import os
 import subprocess
 import threading
-import urllib.error
-import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -16,19 +15,6 @@ from urllib.parse import urlsplit
 from ranger.config import validate_agent_config
 
 log = logging.getLogger("ranger.agent")
-
-
-def load_config(path):
-    return validate_agent_config(json.loads(Path(path).read_text()))
-
-
-class NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):
-        return None
-
-
-# No proxy or redirects: readiness must come from the configured local origin.
-OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
 
 
 class Docker:
@@ -87,17 +73,17 @@ class Docker:
         if not container["Running"]:
             return result
         result["state"] = "unready"
-        url = f"http://127.0.0.1:{item['port']}{item['readiness_path']}"
-        request = urllib.request.Request(url, headers={"Cache-Control": "no-cache"})
+        # http.client follows no redirects and uses no proxy, so the status is the origin's.
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", item["port"], timeout=self.probe_timeout
+        )
         try:
-            try:
-                response = OPENER.open(request, timeout=self.probe_timeout)
-            except urllib.error.HTTPError as exc:
-                response = exc
-            with response:
-                result["http_status"] = response.code
-        except (OSError, ValueError):
+            connection.request("GET", item["readiness_path"], headers={"Cache-Control": "no-cache"})
+            result["http_status"] = connection.getresponse().status
+        except (OSError, http.client.HTTPException):
             return result
+        finally:
+            connection.close()
         if result["http_status"] in item["expected_status"] and result["docker_health"] in {
             "none",
             "healthy",
@@ -107,26 +93,17 @@ class Docker:
 
     def change(self, item, action):
         if action == "start":
-            args = [
-                "up",
-                "-d",
-                "--no-build",
-                "--no-deps",
-                "--pull",
-                item["pull"],
-                item["service"],
-            ]
+            args = ["up", "-d", "--no-build", "--no-deps", "--pull", item["pull"]]
         else:
-            args = ["stop", "--timeout", "10", item["service"]]
-        self.run([*self.compose(item), *args])
+            args = ["stop", "--timeout", "10"]
+        self.run([*self.compose(item), *args, item["service"]])
 
 
 class Agent:
     def __init__(self, config, docker=None):
         self.config = config
         self.docker = docker or Docker()
-        self.locks = {name: threading.Lock() for name in config["workloads"]}
-        self.operations = {name: {"pending": None, "error": None} for name in self.locks}
+        self.operations = {name: {"pending": None, "error": None} for name in config["workloads"]}
         self.guard = threading.Lock()
 
     def health(self):
@@ -152,32 +129,24 @@ class Agent:
             return {**result, "operation": dict(self.operations[name])}
 
     def change(self, name, action):
-        lock = self.locks[name]
-        if not lock.acquire(blocking=False):
-            with self.guard:
-                same_action = self.operations[name]["pending"] == action
-            return 202 if same_action else 409
+        """Run start or stop in the background. Compose skips an already satisfied action."""
         with self.guard:
+            pending = self.operations[name]["pending"]
+            if pending:
+                return 202 if pending == action else 409
             self.operations[name] = {"pending": action, "error": None}
 
         def execute():
+            error = None
             try:
-                item = self.config["workloads"][name]
-                observation = self.docker.observe(item, self.config["node"])
-                if (observation["state"] == "stopped") == (action == "start"):
-                    log.info("%s %s", action, name)
-                    self.docker.change(item, action)
-                    log.info("%s %s completed", action, name)
-                else:
-                    log.info("%s %s skipped; already in the requested state", action, name)
+                log.info("%s %s", action, name)
+                self.docker.change(self.config["workloads"][name], action)
+                log.info("%s %s completed", action, name)
             except Exception as exc:
                 log.error("%s %s failed: %s", action, name, exc)
-                with self.guard:
-                    self.operations[name]["error"] = str(exc) or type(exc).__name__
-            finally:
-                with self.guard:
-                    self.operations[name]["pending"] = None
-                lock.release()
+                error = str(exc) or type(exc).__name__
+            with self.guard:
+                self.operations[name] = {"pending": None, "error": error}
 
         threading.Thread(target=execute, daemon=True).start()
         return 202
@@ -188,9 +157,7 @@ def handler_for(agent, token):
         raise ValueError("AGENT_TOKEN must contain at least 32 characters")
 
     class Handler(BaseHTTPRequestHandler):
-        def setup(self):
-            super().setup()
-            self.connection.settimeout(10)
+        timeout = 10
 
         def log_message(self, *_):
             pass
@@ -213,7 +180,7 @@ def handler_for(agent, token):
             if self.command == "GET" and path == "/health":
                 return self.reply(200, agent.health())
             parts = path.strip("/").split("/")
-            if len(parts) != 3 or parts[0] != "workloads" or parts[1] not in agent.locks:
+            if len(parts) != 3 or parts[0] != "workloads" or parts[1] not in agent.operations:
                 return self.reply(404, {"error": "unknown workload or route"})
             name, action = parts[1:]
             if self.command == "GET" and action == "health":
@@ -236,7 +203,7 @@ def main():
     args = parser.parse_args()
     # systemd adds timestamps when it writes stderr to the journal.
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    config = load_config(args.config)
+    config = validate_agent_config(json.loads(Path(args.config).read_text()))
     agent = Agent(config)
     server = ThreadingHTTPServer(
         (args.host, args.port), handler_for(agent, os.environ["AGENT_TOKEN"])
