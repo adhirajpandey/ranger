@@ -14,11 +14,9 @@
   "workloads": {
     "example-app": {
       "preferred_node": "node-a",
-      "fallback_node": "node-b",
       "hostname": "app.example.com",
       "readiness_path": "/",
       "expected_status": [200],
-      "overlap_safe": true,
       "zone_id": "0123456789abcdef0123456789abcdef",
       "record_id": "fedcba9876543210fedcba9876543210"
     }

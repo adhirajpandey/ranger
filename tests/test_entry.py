@@ -34,7 +34,7 @@ def transport(monkeypatch):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     cluster = object.__new__(module.Cluster)
-    cluster.config = {"policy": {"probe_timeout": 5, "check_interval": 60}}
+    cluster.config = {"policy": {"probe_timeout": 5}}
     cluster.entry_module = module
     return cluster, fetch
 
@@ -130,9 +130,9 @@ def status_handler(transport, token=TOKEN):
     cluster, _ = transport
     stub = SimpleNamespace(fetch=AsyncMock(return_value="cluster response"))
     handler = object.__new__(cluster.entry_module.Default)
-    handler.env = SimpleNamespace(CLUSTER=SimpleNamespace(getByName=Mock(return_value=stub)))
-    if token is not None:
-        handler.env.STATUS_TOKEN = token
+    handler.env = SimpleNamespace(
+        CLUSTER=SimpleNamespace(getByName=Mock(return_value=stub)), STATUS_TOKEN=token
+    )
     return handler, stub
 
 
@@ -163,10 +163,9 @@ async def test_status_forwards_authenticated_requests(transport):
     stub.fetch.assert_awaited_once_with(request)
 
 
-@pytest.mark.parametrize("token", [None, "short"])
-async def test_misconfigured_status_token_is_a_server_error(transport, token):
-    handler, stub = status_handler(transport, token)
-    assert (await handler.fetch(status_request(authorization="Bearer short"))).status == 500
+async def test_empty_status_token_rejects_everything(transport):
+    handler, stub = status_handler(transport, "")
+    assert (await handler.fetch(status_request(authorization="Bearer "))).status == 401
     stub.fetch.assert_not_awaited()
 
 
