@@ -3,7 +3,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from ranger.config import validate_agent_config, validate_cluster_config
+from ranger.config import CYCLE_SECONDS, validate_agent_config, validate_cluster_config
 
 ROOT = Path(__file__).parents[1]
 
@@ -15,6 +15,11 @@ def example(name):
 def test_examples_are_valid():
     validate_cluster_config(example("cluster.json"))
     validate_agent_config(example("agent.json"))
+
+
+def test_cron_matches_the_cycle_length():
+    wrangler = json.loads((ROOT / "wrangler.jsonc").read_text())
+    assert wrangler["triggers"]["crons"] == [f"*/{CYCLE_SECONDS // 60} * * * *"]
 
 
 def render(cluster, tmp_path):

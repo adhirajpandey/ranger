@@ -88,7 +88,8 @@ def mutate(change):
         mutate(lambda c: c.update(policy={"check_interval": 60})),
         mutate(lambda c: c.update(policy={"failure_threshold": 0})),
         mutate(lambda c: c.update(policy={"drain_seconds": 1.5})),
-        mutate(lambda c: c.update(policy={"startup_timeout": 60})),
+        mutate(lambda c: c.update(policy={"startup_timeout": 300})),
+        mutate(lambda c: c.update(policy={"startup_timeout": 600, "readiness_successes": 2})),
     ],
 )
 def test_invalid_cluster_config(config):

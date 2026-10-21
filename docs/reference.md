@@ -52,12 +52,14 @@ All values are positive integers.
 | --- | --- | --- |
 | `probe_timeout` | `5` | Seconds before any outgoing request times out |
 | `failure_threshold` | `2` | Consecutive failed checks that mark a node unhealthy or start a failover |
-| `readiness_successes` | `2` | Consecutive ready checks before DNS switches |
-| `startup_timeout` | `300` | Seconds a replacement has to become ready. At least 60 × `readiness_successes`. |
+| `readiness_successes` | `1` | Consecutive ready checks before DNS switches |
+| `startup_timeout` | `900` | Seconds a replacement has to become ready. More than 300 × `readiness_successes`. |
 | `recovery_stability` | `600` | Seconds of health before a node or preferred copy counts as recovered, and the backoff after a failed replacement |
-| `drain_seconds` | `60` | Seconds between public verification and stopping the old copy |
+| `drain_seconds` | `300` | Seconds between public verification and stopping the old copy |
 
-Cycles run once a minute from the cron trigger in `wrangler.jsonc`.
+Cycles run every five minutes from the cron trigger in `wrangler.jsonc`. Times
+are checked at each cycle, so a value takes effect at the first cycle after it
+has passed.
 
 ## Agent configuration
 
@@ -135,7 +137,7 @@ status, and `operation` holds the `pending` action and the last action's
 | `EMAIL` | Optional send-email binding | Restricted to the `notifications.to` address |
 
 `GET /status` requires `Authorization: Bearer STATUS_TOKEN` and returns the
-controller state. It answers 200 when a cycle finished in the last three
+controller state. It answers 200 when a cycle finished in the last fifteen
 minutes, and 503 otherwise. A wrong token gets 401, and any other route 404.
 
 The controller reads and patches DNS records only at

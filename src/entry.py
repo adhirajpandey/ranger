@@ -12,13 +12,13 @@ from pyodide.ffi import to_js
 from workers import DurableObject, Request, Response, WorkerEntrypoint
 
 from ranger.cloudflare import CloudflareIO
-from ranger.config import validate_cluster_config
+from ranger.config import CYCLE_SECONDS, validate_cluster_config
 from ranger.controller import Notifier, Reconciler, describe, event
 
 # The single controller instance. Renaming it starts a new, empty controller state.
 CLUSTER_NAME = "ranger-v1"
-# Status reports unavailable after three missed one-minute cycles.
-STALE_AFTER = 180
+# Status reports unavailable after three missed cycles.
+STALE_AFTER = 3 * CYCLE_SECONDS
 
 
 class DurableStore:

@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from ranger.config import validate_cluster_config
+from ranger.config import CYCLE_SECONDS, validate_cluster_config
 from ranger.controller import Reconciler
 
 CONFIG = {
@@ -101,7 +101,7 @@ class Cluster:
 
     async def tick(self, cycles=1):
         for _ in range(cycles):
-            self.time += 60
+            self.time += CYCLE_SECONDS
             await self.controller.cycle(self.time)
 
     @property
@@ -122,9 +122,7 @@ async def test_failover_then_stable_failback(failure):
     await c.tick()  # Second failed check starts the replacement.
     assert c.io.running["black-box"]
     assert not c.io.changes
-    await c.tick()  # First readiness success.
-    assert not c.io.changes
-    await c.tick()  # Second readiness success switches DNS, then drains.
+    await c.tick()  # One ready check switches DNS, then drains.
     assert c.io.changes == ["black-box"]
     assert c.workload["transition"]["phase"] == "draining"
     assert c.io.running["white-box"]
@@ -138,12 +136,12 @@ async def test_failover_then_stable_failback(failure):
     c.io.nodes["white-box"] = False
     await c.tick()
     c.io.nodes["white-box"] = True
-    await c.tick(10)  # The first reachable cycle starts the ten-minute stability period.
+    await c.tick(2)  # The first reachable cycle starts the ten-minute stability period.
     assert c.io.changes == ["black-box"]
     assert not c.io.running["white-box"]
     await c.tick()
     assert c.io.running["white-box"]  # Failback starts the preferred copy.
-    await c.tick(2)
+    await c.tick()
     assert c.io.changes == ["black-box", "white-box"]
     await c.tick()
     assert not c.io.running["black-box"]
@@ -157,7 +155,7 @@ async def test_failed_replacement_leaves_dns_unchanged(failure):
     c.io.fail_start = failure == "start"
     c.io.healthy["black-box"] = failure != "readiness"
     c.io.nodes["black-box"] = failure != "both"
-    await c.tick(8)
+    await c.tick(5)
     assert c.io.changes == []
     assert c.io.routed == "white-box"
     assert c.workload["error"]
@@ -188,7 +186,7 @@ async def test_public_failure_restarts_drain():
     c = Cluster()
     await c.tick()
     c.io.healthy["white-box"] = False
-    await c.tick(4)
+    await c.tick(3)
     assert c.workload["transition"]["phase"] == "draining"
     c.io.public_ok = False
     await c.tick()
@@ -260,12 +258,12 @@ async def test_failed_replacement_backs_off_explicitly():
     await c.tick()
     c.io.healthy["white-box"] = False
     c.io.healthy["black-box"] = False
-    await c.tick(7)
+    await c.tick(5)  # The replacement starts on the second cycle and misses its deadline.
     assert c.workload["transition"] is None
     assert c.workload["backoff"]["reason"].startswith("replacement startup")
     await c.tick()
     assert "failover paused" in c.workload["error"]
-    await c.tick(10)
+    await c.tick()
     assert c.workload["backoff"] is None
     assert c.workload["transition"]["phase"] == "starting"
 
@@ -294,10 +292,11 @@ async def test_failback_waits_for_stability_after_the_switch():
     c = Cluster()
     await c.tick(20)  # Long before the failure, the preferred copy is ready.
     c.io.running["white-box"] = False  # A stopped copy stays recoverable.
-    await c.tick(4)
+    await c.tick(3)
     assert c.io.changes == ["black-box"]
-    await c.tick(10)
+    await c.tick(2)
     assert c.io.changes == ["black-box"]
     assert not c.io.running["white-box"]
     await c.tick()
-    assert c.io.running["white-box"]  # Failback starts ten minutes after the switch.
+    # Failback starts ten minutes after the first cycle with traffic elsewhere.
+    assert c.io.running["white-box"]

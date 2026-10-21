@@ -16,7 +16,7 @@ it is a paid feature, and one DNS record per workload is enough for two hosts.
 A controller on host A dies with host A, and a controller on host B cannot tell
 whether A is down or only unreachable from B. So the controller is a Python
 Worker on Cloudflare with one Durable Object, which stores all state and
-serializes the cycles. A cron trigger runs one cycle a minute.
+serializes the cycles. A cron trigger runs one cycle every five minutes.
 
 The controller reaches the agents through Workers VPC services, which route
 through each host's existing tunnel to the agent on loopback. No agent needs a
@@ -38,7 +38,7 @@ keeps no state of its own: Docker is the source of truth.
 
 ## One cycle
 
-Every minute, the controller:
+Every five minutes, the controller:
 
 1. Asks both agents for host and workload health, and reads every workload's
    DNS record, all concurrently. An unreachable host costs one timeout.
@@ -54,30 +54,40 @@ Every minute, the controller:
 starting -> switching -> verifying -> draining -> done
 ```
 
-- **starting.** Start the workload on the target and wait for two consecutive
-  ready checks, at most one per cycle. After five minutes, give up, leave DNS
-  alone, and back off for ten minutes.
+- **starting.** Start the workload on the target and wait for a ready check,
+  at most one per cycle. After fifteen minutes, give up, leave DNS alone, and
+  back off for ten minutes.
 - **switching.** Point the DNS record at the target's tunnel and read it back.
 - **verifying.** Confirm DNS still points at the target and the public
   hostname returns an accepted status. If the target fails two checks in a
   row, abandon the transition and keep both copies.
-- **draining.** Wait one minute, then stop the old copy once its host is
-  reachable.
+- **draining.** Wait until the next cycle, then stop the old copy once its host
+  is reachable.
 
 The controller saves state before every external change, so an interrupted
 cycle resumes from the saved phase.
 
 ## Timing
 
-With the defaults, DNS moves three to four minutes after a workload fails.
-Failback is slower on purpose: waiting ten minutes avoids moving traffic back
-and forth when a host flaps.
+With the defaults, a failure is confirmed by the second failed check, five to
+ten minutes after it happens. The replacement starts in that cycle, and DNS
+moves at the next one, 10 to 15 minutes after the failure. Failback waits for
+ten minutes of stability, which avoids moving traffic back and forth when a
+host flaps.
 
-Faster checks would need Durable Object alarms, because cron triggers run at
-most once a minute. An earlier version used alarms every 20 seconds, but it
-needed a temporary cron to start the first alarm, and a lost alarm stopped the
-controller until someone noticed. For side projects the extra minute does not
-matter. The thresholds and deadlines are configurable; the interval is not.
+Five minutes is slow for an outage, but it suits side projects that can wait,
+and it keeps the controller quiet. Earlier versions ran every minute, and
+before that used Durable Object alarms every 20 seconds. The alarms needed a
+temporary cron to start the first one, and a lost alarm stopped the controller
+until someone noticed. The cron trigger has neither problem.
+
+A single ready check is enough before switching DNS, because the old copy keeps
+running until the public check passes. If the new copy then fails twice, the
+transition is abandoned with both copies running.
+
+The thresholds and deadlines are configurable. The interval is the
+`CYCLE_SECONDS` constant in `src/ranger/config.py` and the cron schedule in
+`wrangler.jsonc`, which must change together.
 
 ## What Ranger gives up
 
@@ -99,7 +109,7 @@ matter. The thresholds and deadlines are configurable; the interval is not.
 ## Failure visibility
 
 `GET /status` returns the saved state and answers 503 when no cycle has
-finished for three minutes, so an ordinary uptime monitor can watch the
+finished for fifteen minutes, so an ordinary uptime monitor can watch the
 controller. Each workload's `error` describes the latest cycle only.
 
 The Worker logs each host status change, transition step, and new or cleared

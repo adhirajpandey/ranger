@@ -107,9 +107,9 @@ async def test_cycle_route_reports_failure(transport):
 @pytest.mark.parametrize(
     "state,age,status",
     [
-        ({"last_cycle": 1000}, 60, 200),
-        ({"last_cycle": 1000}, 180, 200),
-        ({"last_cycle": 1000}, 181, 503),
+        ({"last_cycle": 1000}, 300, 200),
+        ({"last_cycle": 1000}, 900, 200),
+        ({"last_cycle": 1000}, 901, 503),
         (None, 0, 503),
     ],
 )
