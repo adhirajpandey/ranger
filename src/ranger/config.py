@@ -52,7 +52,7 @@ def validate_agent_config(config):
             item,
             f"workload {name}",
             {"compose_file", "project", "service", "port"},
-            {"env_file", "readiness_path", "expected_status", "pull"},
+            {"readiness_path", "expected_status", "pull"},
         )
         configure_readiness(item)
         item.setdefault("pull", "missing")

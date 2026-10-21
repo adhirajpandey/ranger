@@ -15,6 +15,8 @@ from urllib.parse import urlsplit
 from ranger.config import validate_agent_config
 
 log = logging.getLogger("ranger.agent")
+# Loopback only: the controller reaches the agent through the host's tunnel.
+ADDRESS = ("127.0.0.1", 6720)
 
 
 class Docker:
@@ -44,10 +46,7 @@ class Docker:
 
     @staticmethod
     def compose(item):
-        args = ["compose", "-f", item["compose_file"], "-p", item["project"]]
-        if item.get("env_file"):
-            args.extend(["--env-file", item["env_file"]])
-        return args
+        return ["compose", "-f", item["compose_file"], "-p", item["project"]]
 
     def available(self):
         self.run(["info", "--format", "{{.ServerVersion}}"], self.probe_timeout)
@@ -198,21 +197,16 @@ def handler_for(agent, token):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="/etc/ranger-agent/agent.json")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=6720)
     args = parser.parse_args()
     # systemd adds timestamps when it writes stderr to the journal.
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     config = validate_agent_config(json.loads(Path(args.config).read_text()))
     agent = Agent(config)
-    server = ThreadingHTTPServer(
-        (args.host, args.port), handler_for(agent, os.environ["AGENT_TOKEN"])
-    )
+    server = ThreadingHTTPServer(ADDRESS, handler_for(agent, os.environ["AGENT_TOKEN"]))
     log.info(
         "agent for node %s listening on %s:%d with workloads %s",
         config["node"],
-        args.host,
-        args.port,
+        *ADDRESS,
         ", ".join(config["workloads"]),
     )
     server.serve_forever()

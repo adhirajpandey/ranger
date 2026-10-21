@@ -72,7 +72,6 @@ file. [`examples/agent.json`](../examples/agent.json) is a complete example.
 | Workload key | Required | Default | Value |
 | --- | --- | --- | --- |
 | `compose_file` | Yes | | Absolute path to the Compose file |
-| `env_file` | No | | Absolute path to an env file passed to Compose with `--env-file` |
 | `project` | Yes | | Compose project name |
 | `service` | Yes | | Compose service name. It must run exactly one container. |
 | `port` | Yes | | Host port that the readiness check requests on `127.0.0.1` |
@@ -83,10 +82,10 @@ file. [`examples/agent.json`](../examples/agent.json) is a complete example.
 ## Agent
 
 ```text
-ranger-agent [--config PATH] [--host HOST] [--port PORT]
+ranger-agent [--config PATH]
 ```
 
-The agent listens on `127.0.0.1:6720` by default. `AGENT_TOKEN` in the
+The agent listens on `127.0.0.1:6720`. `AGENT_TOKEN` in the
 environment holds the bearer token. The agent exits at startup if the token is
 missing or shorter than 32 characters, or if the configuration is invalid.
 
@@ -95,8 +94,8 @@ that is already satisfied does nothing.
 
 | Action | Command |
 | --- | --- |
-| Start | `docker compose -f FILE -p PROJECT [--env-file ENV] up -d --no-build --no-deps --pull POLICY SERVICE` |
-| Stop | `docker compose -f FILE -p PROJECT [--env-file ENV] stop --timeout 10 SERVICE` |
+| Start | `docker compose -f FILE -p PROJECT up -d --no-build --no-deps --pull POLICY SERVICE` |
+| Stop | `docker compose -f FILE -p PROJECT stop --timeout 10 SERVICE` |
 
 Every route requires `Authorization: Bearer AGENT_TOKEN` and answers JSON.
 
