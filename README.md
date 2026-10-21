@@ -55,9 +55,8 @@ replicated database would each cost more to run than the apps they protect.
 
 It does not guarantee that only one copy runs. If the old host is unreachable
 after a failover, Ranger cannot stop its copy, so both may run until the old
-host returns. Ranger therefore refuses any workload that is not marked
-`overlap_safe`. It does not move data, replicate databases, or preserve
-in-flight requests.
+host returns. Enroll only workloads that tolerate that. Ranger does not move
+data, replicate databases, or preserve in-flight requests.
 
 ## How it is built
 
@@ -125,9 +124,8 @@ To check that the Worker still packages, without deploying it:
 uv run pywrangler deploy --dry-run
 ```
 
-CI runs all of these on every pull request. On a push to `main`, it also
-deploys the Worker after the checks pass. Deployment requires configured
-credentials and provisioned Worker secrets. See
+CI runs all of these on every pull request, and on a push to `main` it also
+deploys the Worker. See
 [Operate Ranger](docs/operations.md#deploy-from-github-actions).
 
 ## Documentation
