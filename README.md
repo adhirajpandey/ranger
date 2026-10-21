@@ -32,8 +32,8 @@ checks and a status endpoint.
 Two small servers at home can run the same apps, but a host failure still
 means downtime until someone notices, starts the app on the other machine, and
 repoints DNS. That can take hours if it happens at night. Ranger does that
-routine part without a person. With the default timings, DNS moves about three
-to four minutes after a workload fails.
+routine part without a person. It checks every five minutes, and with the
+default timings DNS moves 10 to 15 minutes after a workload fails.
 
 It deliberately stays small. Ranger handles stateless workloads that are safe
 to run on both hosts for a short time. Kubernetes, a load balancer, or a
@@ -41,15 +41,15 @@ replicated database would each cost more to run than the apps they protect.
 
 ## What it guarantees
 
-- DNS changes only after the replacement is running and has passed two
-  consecutive readiness checks.
+- DNS changes only after the replacement is running and has passed a readiness
+  check.
 - If the replacement fails to start or never becomes ready, DNS stays unchanged.
 - If both hosts are unhealthy, DNS stays unchanged.
 - If the DNS record points anywhere other than the two configured tunnels, or
   is not a proxied CNAME for the configured hostname, Ranger reports it and
   leaves the record alone.
 - The old copy is stopped only after DNS reads back the new target, the public
-  hostname returns an accepted status, and a one-minute drain has passed.
+  hostname returns an accepted status, and a five-minute drain has passed.
 - Ranger reads and writes DNS records only by their configured zone and record
   IDs. It never searches for records by name.
 
@@ -82,7 +82,8 @@ Ranger runs in production on two hosts with different CPU architectures, an
 arm64 Raspberry Pi and an amd64 laptop, protecting a small stateless web app.
 
 In a drill on 28 September 2026, the app on the preferred host was stopped at
-02:41:36. With the default timings, the controller:
+02:41:36. With the one-minute cycle and two ready checks that Ranger used then,
+the controller:
 
 | Time | Step |
 | --- | --- |

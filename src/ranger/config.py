@@ -5,13 +5,18 @@ import re
 
 NAME = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]*")
 
+# Seconds between cycles. It must match the cron trigger in wrangler.jsonc.
+CYCLE_SECONDS = 300
+
 POLICY_DEFAULTS = {
     "probe_timeout": 5,
     "failure_threshold": 2,
-    "readiness_successes": 2,
-    "startup_timeout": 300,
+    "readiness_successes": 1,
+    # One cycle to start and one spare: a deadline that lands on a cycle has passed.
+    "startup_timeout": 900,
     "recovery_stability": 600,
-    "drain_seconds": 60,
+    # The drain ends at the next cycle either way.
+    "drain_seconds": 300,
 }
 
 
@@ -71,9 +76,12 @@ def validate_cluster_config(config):
     config["policy"] = {**POLICY_DEFAULTS, **config.get("policy", {})}
     if any(type(value) is not int or value <= 0 for value in config["policy"].values()):
         raise ValueError("policy values must be positive integers")
-    # Each one-minute cycle counts at most one ready check.
-    if config["policy"]["startup_timeout"] < 60 * config["policy"]["readiness_successes"]:
-        raise ValueError("startup_timeout must allow one minute per required ready check")
+    # Each cycle counts at most one ready check, and the deadline is checked at cycle start.
+    if (
+        config["policy"]["startup_timeout"]
+        <= CYCLE_SECONDS * config["policy"]["readiness_successes"]
+    ):
+        raise ValueError("startup_timeout must outlast one cycle per required ready check")
     if "notifications" in config:
         check_keys(config["notifications"], "notifications", {"from", "to"})
     nodes = config["nodes"]

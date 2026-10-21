@@ -136,7 +136,7 @@ and `error` and `transition` set to `null`.
 ## Watch the controller
 
 - Point an uptime monitor at `GET /status` with the status token. HTTP 503
-  means no cycle has finished for three minutes.
+  means no cycle has finished for fifteen minutes.
 - Read the controller's events in Workers Logs in the Cloudflare dashboard.
 - Read an agent's log with `journalctl -u ranger-agent@USER`.
 
@@ -162,7 +162,7 @@ sudo systemctl restart ranger-agent@USER
 
 ## Run a failover drill
 
-Run the drill when a few minutes of downtime are acceptable.
+Run the drill when 10 to 15 minutes of downtime are acceptable.
 
 1. Read the status and note each workload's `current` node.
 2. Stop the workload on the preferred host:
@@ -171,12 +171,14 @@ Run the drill when a few minutes of downtime are acceptable.
    docker compose -f /srv/example-app/compose.yaml -p example-app stop
    ```
 
-3. Watch the events. Expect `failover_started` one to two minutes later, then
-   `start_requested`, `dns_switched`, `public_check_passed`, `stop_requested`,
-   and `transition_completed`.
+3. Watch the events. Expect `failover_started` and `start_requested` five to
+   ten minutes later, `dns_switched` and `public_check_passed` one cycle after
+   that, then `stop_requested` and `transition_completed` over the next two
+   cycles.
 4. Request the public hostname every few seconds throughout. The first failed
    request and the start of sustained success give the outage length.
-5. Leave the preferred copy stopped. Ten minutes after DNS switched away, the
+5. Leave the preferred copy stopped. About fifteen minutes after DNS switched
+   away, once the preferred host has been stable for ten minutes, the
    controller starts it, switches back, and stops the fallback copy.
 
 Test a host shutdown and a network loss as separate drills.
