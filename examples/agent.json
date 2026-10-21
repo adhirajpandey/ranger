@@ -3,7 +3,6 @@
   "workloads": {
     "example-app": {
       "compose_file": "/srv/example-app/compose.yaml",
-      "env_file": "/srv/example-app/app.env",
       "project": "example-app",
       "service": "app",
       "port": 3000,

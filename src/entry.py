@@ -1,6 +1,5 @@
-"""Cloudflare entrypoints: the cron trigger, authenticated status, and a test email."""
+"""Cloudflare entrypoints: the cron trigger and authenticated status."""
 
-import asyncio
 import hmac
 import json
 import time
@@ -14,12 +13,12 @@ from workers import DurableObject, Request, Response, WorkerEntrypoint
 
 from ranger.cloudflare import CloudflareIO
 from ranger.config import validate_cluster_config
-from ranger.controller import SEND_TIMEOUT, Notifier, Reconciler, describe, event
+from ranger.controller import Notifier, Reconciler, describe, event
 
 # The single controller instance. Renaming it starts a new, empty controller state.
 CLUSTER_NAME = "ranger-v1"
-# Status reports unavailable after this many missed check intervals.
-STALE_INTERVALS = 3
+# Status reports unavailable after three missed one-minute cycles.
+STALE_AFTER = 180
 
 
 class DurableStore:
@@ -74,30 +73,11 @@ class Cluster(DurableObject):
                 raise RuntimeError(f"HTTP {response.status}")
             return json.loads(await response.text())
         except Exception as exc:
-            detail = str(exc)
-            authorization = (headers or {}).get("Authorization")
-            if authorization:
-                detail = detail.replace(authorization, "[redacted]")
             raise RuntimeError(
-                f"HTTP request failed: {type(exc).__name__}: {detail[:200]}"
+                f"HTTP request failed: {type(exc).__name__}: {str(exc)[:200]}"
             ) from None
 
     async def fetch(self, request):
-        if request.method == "POST" and urlsplit(request.url).path == "/test-email":
-            if "notifications" not in self.config:
-                return Response("email notifications are disabled", status=503)
-            try:
-                await asyncio.wait_for(
-                    self.send_email(
-                        "Ranger test email", "Ranger email delivery test. No actions taken."
-                    ),
-                    SEND_TIMEOUT,
-                )
-            except Exception as exc:
-                event("test_email_failed", error=describe(exc)[:200])
-                return Response("email delivery failed", status=502)
-            event("test_email_sent")
-            return Response("test email accepted")
         if request.method == "POST" and urlsplit(request.url).path == "/cycle":
             # Internal binding only. The public Worker does not forward this route.
             try:
@@ -108,8 +88,7 @@ class Cluster(DurableObject):
             return Response("cycle complete")
         state = await self.store.load() or {"status": "not initialized"}
         # A stalled controller answers 503, so a plain uptime check notices it.
-        stale_after = STALE_INTERVALS * self.config["policy"]["check_interval"]
-        fresh = time.time() - state.get("last_cycle", 0) <= stale_after
+        fresh = time.time() - state.get("last_cycle", 0) <= STALE_AFTER
         return Response(
             json.dumps(state),
             status=200 if fresh else 503,
@@ -119,15 +98,11 @@ class Cluster(DurableObject):
 
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
-        path = urlsplit(request.url).path
-        if (request.method, path) not in {("GET", "/status"), ("POST", "/test-email")}:
+        if request.method != "GET" or urlsplit(request.url).path != "/status":
             return Response("not found", status=404)
-        token = str(getattr(self.env, "STATUS_TOKEN", ""))
-        if len(token) < 32:
-            event("status_token_invalid")
-            return Response("authentication token is not configured", status=500)
+        token = str(self.env.STATUS_TOKEN)
         provided = request.headers.get("Authorization") or ""
-        if not hmac.compare_digest(provided.encode(), f"Bearer {token}".encode()):
+        if not token or not hmac.compare_digest(provided.encode(), f"Bearer {token}".encode()):
             return Response("unauthorized", status=401)
         return await self.env.CLUSTER.getByName(CLUSTER_NAME).fetch(request)
 

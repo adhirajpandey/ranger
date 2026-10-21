@@ -12,19 +12,19 @@ CONFIG = {
         "black-box": {
             "tunnel_target": "11111111-1111-1111-1111-111111111111.cfargotunnel.com",
             "agent_binding": "BLACK_BOX_AGENT",
+            "vpc_service_id": "black-box-service",
         },
         "white-box": {
             "tunnel_target": "22222222-2222-2222-2222-222222222222.cfargotunnel.com",
             "agent_binding": "WHITE_BOX_AGENT",
+            "vpc_service_id": "white-box-service",
         },
     },
     "workloads": {
         "memes": {
             "preferred_node": "white-box",
-            "fallback_node": "black-box",
             "hostname": "memes.example.com",
             "readiness_path": "/",
-            "overlap_safe": True,
             "zone_id": "a" * 32,
             "record_id": "b" * 32,
         }
@@ -248,11 +248,9 @@ async def test_errors_describe_the_current_cycle(capsys):
     c.io.record = RuntimeError("Cloudflare DNS request failed")
     await c.tick(2)
     assert c.workload["error"] == "Cloudflare DNS request failed"
-    assert c.store.value["last_successful_cycle"] < c.store.value["last_cycle"]
     c.io.record = {}
     await c.tick()
     assert c.workload["error"] is None
-    assert c.store.value["last_successful_cycle"] == c.store.value["last_cycle"]
     # A persisting error is logged once, and so is its recovery.
     assert events(capsys)[-2:] == ["workload_error", "workload_error_cleared"]
 

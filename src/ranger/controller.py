@@ -179,7 +179,6 @@ class Reconciler:
                 name,
                 {
                     "current": None,
-                    "desired": spec["preferred_node"],
                     "transition": None,
                     "failures": {},
                     "preferred_since": None,
@@ -200,8 +199,6 @@ class Reconciler:
                 self.emit("workload_error_cleared", workload=name)
             await self.store.save(state)
         state["last_cycle"] = now
-        if not any(w.get("error") for w in state["workloads"].values()):
-            state["last_successful_cycle"] = now
         await self.store.save(state)
 
     def update_node(self, node, available, now):
@@ -256,7 +253,6 @@ class Reconciler:
         if w["transition"]:
             await self.advance(state, name, spec, w, observations, routed, now)
             return
-        w["desired"] = routed
         if w["backoff"]:
             if now < w["backoff"]["until"]:
                 w["error"] = f"{w['backoff']['reason']}; failover paused until the backoff ends"
@@ -275,7 +271,6 @@ class Reconciler:
         if not self.eligible(state, target):
             w["error"] = "no eligible destination; DNS unchanged"
             return
-        w["desired"] = target
         self.emit(
             "failover_started" if failed else "failback_started",
             workload=name,

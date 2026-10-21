@@ -138,3 +138,16 @@ def test_failed_action_is_reported_and_logged(caplog):
     eventually(lambda: agent.observe("test")["operation"]["pending"] is None)
     assert agent.observe("test")["operation"]["error"] == "docker command exited with code 1"
     assert "start test failed" in caplog.text
+
+
+def test_satisfied_action_does_not_touch_compose():
+    class RunningDocker(FakeDocker):
+        running = True
+
+        def change(self, item, action):
+            raise AssertionError("compose must not run")
+
+    agent = Agent({"node": "test-node", "workloads": {"test": {}}}, RunningDocker())
+    assert agent.change("test", "start") == 202
+    eventually(lambda: agent.observe("test")["operation"]["pending"] is None)
+    assert agent.observe("test")["operation"]["error"] is None
