@@ -35,8 +35,13 @@ def check_name(value, what):
 def configure_readiness(workload):
     """Apply readiness defaults. Agents and the controller must use the same values."""
     path = workload.setdefault("readiness_path", "/")
-    if not isinstance(path, str) or not path.startswith("/") or any(c in path for c in "?#"):
-        raise ValueError("readiness_path must be a path without query or fragment")
+    if (
+        not isinstance(path, str)
+        or not path.startswith("/")
+        or any(c in path for c in "?# ")
+        or not path.isprintable()
+    ):
+        raise ValueError("readiness_path must be a path without spaces, query, or fragment")
     statuses = workload.setdefault("expected_status", [200])
     if not isinstance(statuses, list) or not statuses or any(type(s) is not int for s in statuses):
         raise ValueError("expected_status must be a nonempty list of HTTP statuses")
@@ -66,6 +71,9 @@ def validate_cluster_config(config):
     config["policy"] = {**POLICY_DEFAULTS, **config.get("policy", {})}
     if any(type(value) is not int or value <= 0 for value in config["policy"].values()):
         raise ValueError("policy values must be positive integers")
+    # Each one-minute cycle counts at most one ready check.
+    if config["policy"]["startup_timeout"] < 60 * config["policy"]["readiness_successes"]:
+        raise ValueError("startup_timeout must allow one minute per required ready check")
     if "notifications" in config:
         check_keys(config["notifications"], "notifications", {"from", "to"})
     nodes = config["nodes"]

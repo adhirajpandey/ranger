@@ -67,7 +67,8 @@ Do this on both hosts.
    host and `stopped` on the other:
 
    ```sh
-   curl -H "Authorization: Bearer $AGENT_TOKEN" http://127.0.0.1:6720/workloads/example-app/health
+   sudo sh -c '. /etc/ranger-agent/agent.env && curl -H "Authorization: Bearer $AGENT_TOKEN" \
+     http://127.0.0.1:6720/workloads/example-app/health'
    ```
 
 Keep the Compose files and `/etc/ranger-agent/` writable only by trusted users.
@@ -188,8 +189,8 @@ To take a workload out of Ranger's control:
 2. Read the last status to see which copies run and where DNS points.
 3. Keep one copy running. If DNS does not point at its host's tunnel, change
    the record in the dashboard and check the public hostname.
-4. Wait one minute, then stop the other copy, and restore the restart policy if
-   you changed it.
+4. Wait two minutes for Cloudflare's edges to pick up any DNS change, then stop
+   the other copy, and restore the restart policy if you changed it.
 
 To remove Ranger entirely, save the last status, then delete the Worker, the
 VPC services, and the DNS API token.

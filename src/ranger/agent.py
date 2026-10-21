@@ -128,7 +128,7 @@ class Agent:
             return {**result, "operation": dict(self.operations[name])}
 
     def change(self, name, action):
-        """Run start or stop in the background. Compose skips an already satisfied action."""
+        """Run start or stop in the background, skipping an already satisfied action."""
         with self.guard:
             pending = self.operations[name]["pending"]
             if pending:
@@ -138,9 +138,16 @@ class Agent:
         def execute():
             error = None
             try:
-                log.info("%s %s", action, name)
-                self.docker.change(self.config["workloads"][name], action)
-                log.info("%s %s completed", action, name)
+                item = self.config["workloads"][name]
+                # Compose would recreate a running container whose image or file changed.
+                if (self.docker.observe(item, self.config["node"])["state"] == "stopped") == (
+                    action == "start"
+                ):
+                    log.info("%s %s", action, name)
+                    self.docker.change(item, action)
+                    log.info("%s %s completed", action, name)
+                else:
+                    log.info("%s %s skipped; already in the requested state", action, name)
             except Exception as exc:
                 log.error("%s %s failed: %s", action, name, exc)
                 error = str(exc) or type(exc).__name__

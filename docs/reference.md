@@ -38,7 +38,7 @@ digits, `_`, and `-`.
 | `hostname` | Yes | | Public hostname of the workload |
 | `zone_id` | Yes | | Cloudflare zone ID |
 | `record_id` | Yes | | ID of the hostname's DNS record. Each record belongs to one workload. |
-| `readiness_path` | No | `/` | Path for the public readiness check, without a query or fragment |
+| `readiness_path` | No | `/` | Path for the public readiness check, without spaces, a query, or a fragment |
 | `expected_status` | No | `[200]` | HTTP statuses that count as ready. Redirects are not followed. |
 
 Use the same `readiness_path` and `expected_status` in the cluster
@@ -53,7 +53,7 @@ All values are positive integers.
 | `probe_timeout` | `5` | Seconds before any outgoing request times out |
 | `failure_threshold` | `2` | Consecutive failed checks that mark a node unhealthy or start a failover |
 | `readiness_successes` | `2` | Consecutive ready checks before DNS switches |
-| `startup_timeout` | `300` | Seconds a replacement has to become ready |
+| `startup_timeout` | `300` | Seconds a replacement has to become ready. At least 60 × `readiness_successes`. |
 | `recovery_stability` | `600` | Seconds of health before a node or preferred copy counts as recovered, and the backoff after a failed replacement |
 | `drain_seconds` | `60` | Seconds between public verification and stopping the old copy |
 

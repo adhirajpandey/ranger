@@ -24,6 +24,8 @@ AGENT = {
         {"readiness_path": "relative"},
         {"readiness_path": "/?query"},
         {"readiness_path": "/#fragment"},
+        {"readiness_path": "/health check"},
+        {"readiness_path": "/\n"},
         {"expected_status": []},
         {"expected_status": [True]},
         {"expected_status": "200"},
@@ -86,6 +88,7 @@ def mutate(change):
         mutate(lambda c: c.update(policy={"check_interval": 60})),
         mutate(lambda c: c.update(policy={"failure_threshold": 0})),
         mutate(lambda c: c.update(policy={"drain_seconds": 1.5})),
+        mutate(lambda c: c.update(policy={"startup_timeout": 60})),
     ],
 )
 def test_invalid_cluster_config(config):
