@@ -169,15 +169,10 @@ async def test_empty_status_token_rejects_everything(transport):
     stub.fetch.assert_not_awaited()
 
 
-async def test_test_email_uses_the_configured_addresses(transport):
+async def test_email_uses_the_configured_addresses(transport):
     cluster, _ = transport
     cluster.config["notifications"] = {"from": "ranger@example.com", "to": "owner@example.net"}
     cluster.env = SimpleNamespace(EMAIL=SimpleNamespace(send=AsyncMock()))
-    request = SimpleNamespace(method="POST", url="https://ranger.example/test-email")
-    assert (await cluster.fetch(request)).status == 200
+    await cluster.send_email("subject", "text")
     message = cluster.env.EMAIL.send.await_args.args[0]
     assert (message["from"], message["to"]) == ("ranger@example.com", "owner@example.net")
-    cluster.env.EMAIL.send.side_effect = RuntimeError("provider details")
-    assert (await cluster.fetch(request)).status == 502
-    del cluster.config["notifications"]
-    assert (await cluster.fetch(request)).status == 503

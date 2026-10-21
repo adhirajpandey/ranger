@@ -132,17 +132,12 @@ status, and `operation` holds the `pending` action and the last action's
 | `CLUSTER_CONFIG` | Variable | The validated cluster configuration |
 | `DNS_API_TOKEN` | Secret | Cloudflare API token with DNS Read and DNS Edit on the workloads' zones |
 | `AGENT_TOKEN` | Secret | The token shared by both agents |
-| `STATUS_TOKEN` | Secret | Bearer token for the Worker's routes |
+| `STATUS_TOKEN` | Secret | Bearer token for `GET /status` |
 | `EMAIL` | Optional send-email binding | Restricted to the `notifications.to` address |
 
-Both routes require `Authorization: Bearer STATUS_TOKEN`; anything else gets
-401 or 404.
-
-- `GET /status` returns the controller state. It answers 200 when a cycle
-  finished in the last three minutes, and 503 otherwise.
-- `POST /test-email` sends a fixed message without running a cycle. It answers
-  200 when Cloudflare accepts the message, 502 when sending fails, and 503 when
-  notifications are not configured.
+`GET /status` requires `Authorization: Bearer STATUS_TOKEN` and returns the
+controller state. It answers 200 when a cycle finished in the last three
+minutes, and 503 otherwise. A wrong token gets 401, and any other route 404.
 
 The controller reads and patches DNS records only at
 `/client/v4/zones/ZONE_ID/dns_records/RECORD_ID`, and acts on a record only
@@ -194,6 +189,5 @@ configured.
 | `workload_error_cleared` ✉ | `workload` | A workload's error has cleared |
 | `cycle_failed` | `error` | A cycle failed outside any single workload |
 | `notification_sent`, `notification_failed` | `error` on failure | Result of emailing a cycle's events |
-| `test_email_sent`, `test_email_failed` | `error` on failure | Result of `POST /test-email` |
 
 The agent logs to standard error, which systemd writes to the journal.

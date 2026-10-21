@@ -62,7 +62,7 @@ data, replicate databases, or preserve in-flight requests.
 
 | Path | What it is |
 | --- | --- |
-| `src/entry.py` | Worker and Durable Object entrypoints: cron trigger, authenticated status, test email, HTTP transport |
+| `src/entry.py` | Worker and Durable Object entrypoints: cron trigger, authenticated status, HTTP transport |
 | `src/ranger/controller.py` | The reconciliation cycle and email notifications, independent of the Workers runtime |
 | `src/ranger/agent.py` | The node agent: an authenticated HTTP API over Docker Compose |
 | `src/ranger/config.py` | Validation for the controller and agent configurations |

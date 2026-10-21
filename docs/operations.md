@@ -213,11 +213,8 @@ Cloudflare account.
    ```
 
 2. Deploy. The binding can send only to `to`.
-3. Send a test email, then check the inbox:
 
-   ```sh
-   curl -X POST -H "Authorization: Bearer $STATUS_TOKEN" \
-     https://ranger.SUBDOMAIN.workers.dev/test-email
-   ```
+To check delivery, [run a failover drill](#run-a-failover-drill) and watch for
+the emails, or look for `notification_sent` in the Worker logs.
 
 To turn notifications off, remove the key and deploy.
