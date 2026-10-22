@@ -191,7 +191,7 @@ async def test_public_failure_restarts_drain():
     c.io.public_ok = False
     await c.tick()
     assert c.io.running["white-box"]
-    assert c.workload["transition"]["drain_until"] is None
+    assert c.workload["transition"]["phase"] == "verifying"
     c.io.public_ok = True
     await c.tick()
     assert c.workload["transition"]["phase"] == "draining"
@@ -253,19 +253,17 @@ async def test_errors_describe_the_current_cycle(capsys):
     assert events(capsys)[-2:] == ["workload_error", "workload_error_cleared"]
 
 
-async def test_failed_replacement_backs_off_explicitly():
+async def test_failed_replacement_is_abandoned_then_retried():
     c = Cluster()
     await c.tick()
     c.io.healthy["white-box"] = False
     c.io.healthy["black-box"] = False
     await c.tick(5)  # The replacement starts on the second cycle and misses its deadline.
     assert c.workload["transition"] is None
-    assert c.workload["backoff"]["reason"].startswith("replacement startup")
+    assert c.workload["error"] == "replacement did not become ready in time"
     await c.tick()
-    assert "failover paused" in c.workload["error"]
-    await c.tick()
-    assert c.workload["backoff"] is None
     assert c.workload["transition"]["phase"] == "starting"
+    assert c.io.changes == []
 
 
 @pytest.mark.parametrize(

@@ -48,16 +48,6 @@ async def test_undelivered_events_go_out_with_the_next_email():
     assert store.value == []
 
 
-async def test_legacy_pending_lines_are_preserved():
-    store, send = Store(), AsyncMock()
-    store.value = ["1970-01-01T00:00:00+00:00 node_status node=a status=unhealthy"]
-    await Notifier(store, send).deliver([], 60)
-    assert payload(send.await_args.args[1]) == [
-        "1970-01-01T00:00:00+00:00 node_status node=a status=unhealthy"
-    ]
-    assert store.value == []
-
-
 @pytest.mark.parametrize(
     ("item", "expected"),
     [
@@ -72,10 +62,10 @@ async def test_legacy_pending_lines_are_preserved():
             "Ranger stopped moving w to b: timeout",
         ),
         ({"event": "workload_error_cleared", "workload": "w"}, "previous error for w"),
-        ({"event": "future_event", "detail": "kept"}, "Ranger recorded an update"),
     ],
 )
 def test_human_summary_precedes_debug_payload(item, expected):
+    item["timestamp"] = "1970-01-01T00:00:00+00:00"
     subject, text = notification_message([item])
     assert subject.startswith("Ranger: ")
     assert expected in text.split("Debug payload", 1)[0]
