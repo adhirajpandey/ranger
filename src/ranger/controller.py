@@ -43,59 +43,45 @@ def pending(observation):
 SEND_TIMEOUT = 30
 
 
-def notification_summary(item):
+SUMMARIES = {
+    "unhealthy": "{node} failed repeated health checks and is unavailable for failover.",
+    "recovering": "{node} is responding again. Ranger is waiting for it to stay healthy.",
+    "healthy": "{node} is healthy and available for failover.",
+    "failover_started": (
+        "{workload} failed repeated checks on {source}. "
+        "Ranger is preparing a replacement on {target}."
+    ),
+    "failback_started": (
+        "{workload} is moving back from {source} to its preferred host, {target}, "
+        "after the recovery waiting period."
+    ),
+    "transition_completed": (
+        "{workload} has moved from {source} to {target}. "
+        "DNS and the public health check passed, and the old copy is stopped."
+    ),
+    "transition_abandoned": "Ranger stopped moving {workload} to {target}: {reason}.",
+    "workload_error": "Ranger encountered a problem managing {workload}: {error}.",
+    "workload_error_cleared": "Ranger no longer reports the previous error for {workload}.",
+}
+
+
+def summary(item):
     """Describe an event without requiring the reader to know the log schema."""
-    if isinstance(item, str):
-        # Older deployments persisted preformatted log lines.
-        return "An earlier notification is included in the debug payload."
-    name = item["event"]
-    if name == "node_status":
-        node, status = item["node"], item["status"]
-        if status == "unhealthy":
-            return f"{node} failed repeated health checks and is unavailable for failover."
-        if status == "recovering":
-            return f"{node} is responding again. Ranger is waiting for it to stay healthy."
-        if status == "healthy":
-            return f"{node} is healthy and available for failover."
-        return f"{node} is now {status}."
-    workload = item.get("workload", "Workload")
-    if name == "failover_started":
-        return (
-            f"{workload} failed repeated checks on {item['source']}. "
-            f"Ranger is preparing a replacement on {item['target']}."
-        )
-    if name == "failback_started":
-        return (
-            f"{workload} is moving back from {item['source']} to its preferred host, "
-            f"{item['target']}, after the recovery waiting period."
-        )
-    if name == "transition_completed":
-        return (
-            f"{workload} has moved from {item['source']} to {item['target']}. "
-            "DNS and the public health check passed, and the old copy is stopped."
-        )
-    if name == "transition_abandoned":
-        return f"Ranger stopped moving {workload} to {item['target']}: {item['reason']}."
-    if name == "workload_error":
-        return f"Ranger encountered a problem managing {workload}: {item['error']}."
-    if name == "workload_error_cleared":
-        return f"Ranger no longer reports the previous error for {workload}."
-    return "Ranger recorded an update. See the debug payload for details."
+    key = item["status"] if item["event"] == "node_status" else item["event"]
+    return SUMMARIES[key].format(**item)
 
 
 def notification_message(items):
-    summaries = [notification_summary(item) for item in items]
+    summaries = [summary(item) for item in items]
     subject = f"Ranger: {summaries[0]}" if len(items) == 1 else f"Ranger: {len(items)} updates"
     # Keep subjects on one line even if an adapter supplies a multiline error.
     subject = " ".join(subject.split())[:160]
     paragraphs = []
-    for item, summary in zip(items, summaries):
-        timestamp = item.get("timestamp") if isinstance(item, dict) else None
-        if timestamp:
-            timestamp = datetime.fromisoformat(timestamp).strftime("%d %b %Y at %H:%M UTC")
-        paragraphs.append(f"{timestamp}\n{summary}" if timestamp else summary)
-    text = "\n\n".join(paragraphs)
-    return subject, text + "\n\nDebug payload (JSON)\n" + json.dumps(items, indent=2)
+    for item, text in zip(items, summaries):
+        when = datetime.fromisoformat(item["timestamp"]).strftime("%d %b %Y at %H:%M UTC")
+        paragraphs.append(f"{when}\n{text}")
+    body = "\n\n".join(paragraphs)
+    return subject, body + "\n\nDebug payload (JSON)\n" + json.dumps(items, indent=2)
 
 
 class Notifier:
@@ -182,7 +168,6 @@ class Reconciler:
                     "transition": None,
                     "failures": {},
                     "preferred_since": None,
-                    "backoff": None,
                     "error": None,
                 },
             )
@@ -253,11 +238,6 @@ class Reconciler:
         if w["transition"]:
             await self.advance(state, name, spec, w, observations, routed, now)
             return
-        if w["backoff"]:
-            if now < w["backoff"]["until"]:
-                w["error"] = f"{w['backoff']['reason']}; failover paused until the backoff ends"
-                return
-            w["backoff"] = None
         failed = w["failures"].get(routed, 0) >= self.policy["failure_threshold"]
         other = next(node for node in self.config["nodes"] if node != routed)
         failback = (
@@ -282,8 +262,6 @@ class Reconciler:
             "target": target,
             "phase": "starting",
             "deadline": now + self.policy["startup_timeout"],
-            "ready_count": 0,
-            "drain_until": None,
         }
         await self.store.save(state)
         await self.advance(state, name, spec, w, observations, routed, now)
@@ -296,75 +274,55 @@ class Reconciler:
         target_ready = self.eligible(state, target) and ready(observed)
         if t["phase"] == "starting":
             if now >= t["deadline"]:
-                reason = "replacement startup or readiness deadline exceeded"
-                w["error"], w["transition"] = reason, None
-                w["backoff"] = {"until": now + self.policy["recovery_stability"], "reason": reason}
-                self.emit("transition_abandoned", workload=name, target=target, reason=reason)
+                w["error"], w["transition"] = "replacement did not become ready in time", None
+                self.emit("transition_abandoned", workload=name, target=target, reason=w["error"])
                 return
             if not target_ready:
-                t["ready_count"] = 0
                 if self.eligible(state, target) and stopped(observed) and not pending(observed):
                     await self.store.save(state)
                     event("start_requested", workload=name, node=target)
                     await self.io.change(target, name, "start")
                 return
-            # Each cycle contributes at most one readiness success.
-            t["ready_count"] += 1
-            if t["ready_count"] < self.policy["readiness_successes"]:
-                return
-            w["failures"][target] = 0
-            t["phase"] = "switching"
-            await self.store.save(state)
-
-        if t["phase"] == "switching":
-            if not target_ready and routed != target:
-                t["phase"], t["ready_count"] = "starting", 0
-                return
+            # Switching is idempotent, so an interrupted cycle simply repeats it.
             if routed != target:
                 await self.io.set_dns(spec, target_tunnel)
                 dns = await self.io.dns(spec)
                 if dns["content"] != target_tunnel:
                     raise RuntimeError("DNS readback has not confirmed destination")
                 event("dns_switched", workload=name, source=routed, target=target)
-            w["current"] = target
-            w["dns_target"] = target_tunnel
+            w["current"], w["dns_target"] = target, target_tunnel
+            w["failures"][target] = 0
             t["phase"] = "verifying"
-            await self.store.save(state)
 
-        if t["phase"] in {"verifying", "draining"}:
-            if not target_ready:
-                t["phase"], t["drain_until"] = "verifying", None
-                if w["failures"].get(target, 0) >= self.policy["failure_threshold"]:
-                    # Reconsider the observed placement next cycle, keeping both copies.
-                    w["transition"] = None
-                    w["error"] = "destination failed after cutover"
-                    self.emit(
-                        "transition_abandoned", workload=name, target=target, reason=w["error"]
-                    )
-                return
-            # DNS must still point to this target before stopping any previous copy.
-            dns = await self.io.dns(spec)
-            if dns["content"] != target_tunnel:
-                raise RuntimeError("DNS changed during cutover; keeping both copies")
-            public = await self.io.public(spec)
-            if public.get("http_status") not in spec["expected_status"]:
-                t["phase"], t["drain_until"] = "verifying", None
-                raise RuntimeError("public readiness did not return an accepted HTTP status")
-            if t["phase"] == "verifying":
-                t["phase"] = "draining"
-                t["drain_until"] = now + self.policy["drain_seconds"]
-                event("public_check_passed", workload=name, target=target)
-                await self.store.save(state)
-            if now < t["drain_until"]:
-                return
-            if not state["nodes"][source]["available"]:
-                w["error"] = "cutover verified; previous node unreachable for cleanup"
-                return
-            source_obs = observations[source]
-            if stopped(source_obs) and not pending(source_obs):
+        if not target_ready:
+            t["phase"] = "verifying"
+            if w["failures"].get(target, 0) >= self.policy["failure_threshold"]:
+                # Reconsider the observed placement next cycle, keeping both copies.
                 w["transition"] = None
-                self.emit("transition_completed", workload=name, source=source, target=target)
-                return
-            await self.store.save(state)
-            event("stop_requested", workload=name, node=source)
-            await self.io.change(source, name, "stop")
+                w["error"] = "destination failed after cutover"
+                self.emit("transition_abandoned", workload=name, target=target, reason=w["error"])
+            return
+        # DNS must still point to this target before stopping any previous copy.
+        dns = await self.io.dns(spec)
+        if dns["content"] != target_tunnel:
+            raise RuntimeError("DNS changed during cutover; keeping both copies")
+        public = await self.io.public(spec)
+        if public.get("http_status") not in spec["expected_status"]:
+            t["phase"] = "verifying"
+            raise RuntimeError("public readiness did not return an accepted HTTP status")
+        if t["phase"] == "verifying":
+            # Drain for one cycle while Cloudflare's edges pick up the new target.
+            t["phase"] = "draining"
+            event("public_check_passed", workload=name, target=target)
+            return
+        if not state["nodes"][source]["available"]:
+            w["error"] = "cutover verified; previous node unreachable for cleanup"
+            return
+        source_obs = observations[source]
+        if stopped(source_obs) and not pending(source_obs):
+            w["transition"] = None
+            self.emit("transition_completed", workload=name, source=source, target=target)
+            return
+        await self.store.save(state)
+        event("stop_requested", workload=name, node=source)
+        await self.io.change(source, name, "stop")
