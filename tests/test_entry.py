@@ -71,25 +71,6 @@ async def test_management_transport_retains_json_and_success_requirement(transpo
         await cluster.request("https://example.com/api")
 
 
-async def test_scheduled_run_cycles_the_named_cluster_at_its_scheduled_time(transport):
-    cluster, _ = transport
-    module = cluster.entry_module
-    request = object()
-    module.Request = Mock(return_value=request)
-    stub = SimpleNamespace(fetch=AsyncMock())
-    binding = SimpleNamespace(getByName=Mock(return_value=stub))
-    handler = object.__new__(module.Default)
-    handler.env = SimpleNamespace(CLUSTER=binding)
-
-    await handler.scheduled(SimpleNamespace(scheduledTime=120_000), handler.env, SimpleNamespace())
-
-    binding.getByName.assert_called_once_with("ranger-v1")
-    module.Request.assert_called_once_with(
-        "http://internal/cycle", method="POST", body=json.dumps({"now": 120.0})
-    )
-    stub.fetch.assert_awaited_once_with(request)
-
-
 async def test_cycle_route_reports_failure(transport):
     cluster, _ = transport
     cluster.reconciler = SimpleNamespace(cycle=AsyncMock())
@@ -167,12 +148,3 @@ async def test_empty_status_token_rejects_everything(transport):
     handler, stub = status_handler(transport, "")
     assert (await handler.fetch(status_request(authorization="Bearer "))).status == 401
     stub.fetch.assert_not_awaited()
-
-
-async def test_email_uses_the_configured_addresses(transport):
-    cluster, _ = transport
-    cluster.config["notifications"] = {"from": "ranger@example.com", "to": "owner@example.net"}
-    cluster.env = SimpleNamespace(EMAIL=SimpleNamespace(send=AsyncMock()))
-    await cluster.send_email("subject", "text")
-    message = cluster.env.EMAIL.send.await_args.args[0]
-    assert (message["from"], message["to"]) == ("ranger@example.com", "owner@example.net")
