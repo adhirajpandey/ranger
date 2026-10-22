@@ -1,15 +1,14 @@
 # Reference
 
-This page lists Ranger's configuration keys, HTTP routes, status fields, and
-log events. [How Ranger works](architecture.md) explains the behaviour behind
-them. Unknown configuration keys are rejected at every level, so a typo fails
+Ranger's configuration keys, HTTP routes, status fields, and log events.
+Unknown configuration keys are rejected at every level, so a typo fails
 validation instead of being ignored.
 
 ## Cluster configuration
 
-The renderer, `scripts/configure-worker.py`, validates a cluster file and
-writes it into `wrangler.local.jsonc` as the `CLUSTER_CONFIG` variable, along
-with the VPC service bindings and, when configured, the email binding.
+`scripts/configure-worker.py` validates a cluster file and writes it into
+`wrangler.local.jsonc` as the `CLUSTER_CONFIG` variable, along with the VPC
+service bindings and, when configured, the email binding.
 [`examples/cluster.json`](../examples/cluster.json) is a complete example.
 
 | Key | Required | Value |
@@ -22,82 +21,63 @@ with the VPC service bindings and, when configured, the email binding.
 Node and workload names start with a letter or digit and contain only letters,
 digits, `_`, and `-`.
 
-### Node
-
-| Key | Value |
+| Node key | Value |
 | --- | --- |
 | `tunnel_target` | The node's tunnel hostname, `<tunnel-id>.cfargotunnel.com`. The two nodes must differ. |
 | `agent_binding` | Binding name for the node's Workers VPC service, for example `NODE_A_AGENT` |
 | `vpc_service_id` | ID of that Workers VPC service |
 
-### Workload
-
-| Key | Required | Default | Value |
-| --- | --- | --- | --- |
-| `preferred_node` | Yes | | The node that serves the workload when it is healthy. The other node is the fallback. |
-| `hostname` | Yes | | Public hostname of the workload |
-| `zone_id` | Yes | | Cloudflare zone ID |
-| `record_id` | Yes | | ID of the hostname's DNS record. Each record belongs to one workload. |
-| `readiness_path` | No | `/` | Path for the public readiness check, without spaces, a query, or a fragment |
-| `expected_status` | No | `[200]` | HTTP statuses that count as ready. Redirects are not followed. |
+| Workload key | Default | Value |
+| --- | --- | --- |
+| `preferred_node` | Required | The node that serves the workload when it is healthy |
+| `hostname` | Required | Public hostname of the workload |
+| `zone_id` | Required | Cloudflare zone ID |
+| `record_id` | Required | ID of the hostname's DNS record. Each record belongs to one workload. |
+| `readiness_path` | `/` | Path for the public readiness check, without spaces, a query, or a fragment |
+| `expected_status` | `[200]` | HTTP statuses that count as ready. Redirects are not followed. |
 
 Use the same `readiness_path` and `expected_status` in the cluster
 configuration and in both agent configurations.
 
-### Policy
+Policy values are positive integers. Times are checked once per five-minute
+cycle, so a value takes effect at the first cycle after it has passed.
 
-All values are positive integers.
-
-| Key | Default | Meaning |
+| Policy key | Default | Meaning |
 | --- | --- | --- |
 | `probe_timeout` | `5` | Seconds before any outgoing request times out |
 | `failure_threshold` | `2` | Consecutive failed checks that mark a node unhealthy or start a failover |
-| `readiness_successes` | `1` | Consecutive ready checks before DNS switches |
-| `startup_timeout` | `900` | Seconds a replacement has to become ready. More than 300 × `readiness_successes`. |
-| `recovery_stability` | `600` | Seconds of health before a node or preferred copy counts as recovered, and the backoff after a failed replacement |
-| `drain_seconds` | `300` | Seconds between public verification and stopping the old copy |
+| `startup_timeout` | `900` | Seconds a replacement has to become ready. More than 300. |
+| `recovery_stability` | `600` | Seconds of health before a node or preferred copy counts as recovered |
 
-Cycles run every five minutes from the cron trigger in `wrangler.jsonc`. Times
-are checked at each cycle, so a value takes effect at the first cycle after it
-has passed.
+The cycle length is `CYCLE_SECONDS` in `src/ranger/config.py` and the cron
+schedule in `wrangler.jsonc`, which must change together.
 
 ## Agent configuration
 
 The agent reads `/etc/ranger-agent/agent.json` unless `--config` names another
 file. [`examples/agent.json`](../examples/agent.json) is a complete example.
+`node` names this node, and `workloads` lists the workloads it may control:
 
-| Key | Value |
-| --- | --- |
-| `node` | This node's name, matching a key in the cluster configuration's `nodes` |
-| `workloads` | Workloads this agent may control, keyed by workload name |
+| Workload key | Default | Value |
+| --- | --- | --- |
+| `compose_file` | Required | Absolute path to the Compose file |
+| `project` | Required | Compose project name |
+| `service` | Required | Compose service name. It must run exactly one container. |
+| `port` | Required | Host port that the readiness check requests on `127.0.0.1` |
+| `readiness_path` | `/` | Path for the local readiness check |
+| `expected_status` | `[200]` | HTTP statuses that count as ready |
+| `pull` | `missing` | Compose pull policy on start: `never`, `missing`, or `always` |
 
-| Workload key | Required | Default | Value |
-| --- | --- | --- | --- |
-| `compose_file` | Yes | | Absolute path to the Compose file |
-| `project` | Yes | | Compose project name |
-| `service` | Yes | | Compose service name. It must run exactly one container. |
-| `port` | Yes | | Host port that the readiness check requests on `127.0.0.1` |
-| `readiness_path` | No | `/` | Path for the local readiness check |
-| `expected_status` | No | `[200]` | HTTP statuses that count as ready |
-| `pull` | No | `missing` | Compose pull policy on start: `never`, `missing`, or `always` |
+## Agent API
 
-## Agent
+The agent listens on `127.0.0.1:6720` and reads its bearer token from
+`AGENT_TOKEN`. It exits at startup if the token is missing or shorter than 32
+characters, or if the configuration is invalid.
 
-```text
-ranger-agent [--config PATH]
-```
-
-The agent listens on `127.0.0.1:6720`. `AGENT_TOKEN` in the
-environment holds the bearer token. The agent exits at startup if the token is
-missing or shorter than 32 characters, or if the configuration is invalid.
-
-It runs these Compose commands, with a 100-second timeout. A start or stop
-that is already satisfied does nothing.
-
-| Action | Command |
-| --- | --- |
-| Start | `docker compose -f FILE -p PROJECT up -d --no-build --no-deps --pull POLICY SERVICE` |
-| Stop | `docker compose -f FILE -p PROJECT stop --timeout 10 SERVICE` |
+It starts a workload with `docker compose -f FILE -p PROJECT up -d --no-build
+--no-deps --pull POLICY SERVICE` and stops it with `docker compose -f FILE -p
+PROJECT stop --timeout 10 SERVICE`, each with a 100-second timeout. A start or
+stop that is already satisfied does nothing.
 
 Every route requires `Authorization: Bearer AGENT_TOKEN` and answers JSON.
 
@@ -111,18 +91,10 @@ Every route requires `Authorization: Bearer AGENT_TOKEN` and answers JSON.
 A wrong token gets 401, an unknown route or workload 404, and the wrong method
 405. A start or stop while the other action is still running gets 409.
 
-A workload observation has a `state` and supporting fields:
-
-| `state` | Meaning |
-| --- | --- |
-| `stopped` | No container is running |
-| `unready` | The container runs, but Docker's health check or the local HTTP request fails |
-| `ready` | The container runs, Docker's health is `none` or `healthy`, and the local request returned an accepted status |
-| `error` | Docker could not be observed. `error` says why. |
-
-`http_status` is the local response status, `docker_health` the Docker health
-status, and `operation` holds the `pending` action and the last action's
-`error`.
+An observation's `state` is `stopped`, `unready` (running, but Docker's health
+check or the local request fails), `ready`, or `error` (Docker could not be
+observed, with `error` saying why). It also has `http_status`, `docker_health`,
+and `operation`, which holds the `pending` action and the last action's `error`.
 
 ## Worker
 
@@ -138,14 +110,12 @@ status, and `operation` holds the `pending` action and the last action's
 
 `GET /status` requires `Authorization: Bearer STATUS_TOKEN` and returns the
 controller state. It answers 200 when a cycle finished in the last fifteen
-minutes, and 503 otherwise. A wrong token gets 401, and any other route 404.
+minutes, and 503 otherwise, so an ordinary uptime monitor can watch the
+controller.
 
-The controller reads and patches DNS records only at
-`/client/v4/zones/ZONE_ID/dns_records/RECORD_ID`, and acts on a record only
-when it is a proxied CNAME named `hostname` whose content is one of the two
-tunnel targets. The public readiness check requests
+The public readiness check requests
 `https://HOSTNAME/READINESS_PATH?failover_probe=NANOSECONDS` without reading
-the body. No request follows redirects.
+the body or following redirects.
 
 ## Status fields
 
@@ -165,15 +135,15 @@ Each entry in `workloads` has:
 | `observations` | Latest observation from each node's agent |
 | `failures` | Consecutive failed checks, by node |
 | `preferred_since` | Start of the preferred copy's stable period while traffic is elsewhere, or `null` |
-| `transition` | The running transition, or `null`: `source`, `target`, `phase`, `deadline`, `ready_count`, and `drain_until` |
-| `backoff` | `until` and `reason` after a failed replacement, or `null` |
+| `transition` | `source`, `target`, `phase`, and `deadline` of the running transition, or `null` |
 | `error` | What went wrong in the latest cycle, or `null` |
 
 ## Log events
 
 The Worker writes one JSON object per line, with an `event` field and the
-fields below. Events marked with ✉ are also emailed when notifications are
-configured.
+fields below. Events marked ✉ are also emailed when notifications are
+configured. The agents log to the systemd journal, which also keeps Docker's
+error output, because it can contain registry credentials.
 
 | Event | Fields | When |
 | --- | --- | --- |
@@ -190,5 +160,3 @@ configured.
 | `workload_error_cleared` ✉ | `workload` | A workload's error has cleared |
 | `cycle_failed` | `error` | A cycle failed outside any single workload |
 | `notification_sent`, `notification_failed` | `error` on failure | Result of emailing a cycle's events |
-
-The agent logs to standard error, which systemd writes to the journal.

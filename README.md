@@ -4,14 +4,12 @@
 
 Ranger moves a Docker Compose service to a second host when the host serving it
 fails, then moves it back once the first host has been healthy for ten minutes.
-It is built for self-hosted side projects that run behind Cloudflare Tunnels,
-and it runs entirely on Cloudflare's free plan. Ranger calls each protected
-Compose service a workload.
+It is built for self-hosted side projects behind Cloudflare Tunnels, and it
+runs on Cloudflare's free plan. Ranger calls each protected service a workload.
 
-Each host runs its own tunnel. A workload's public hostname is a proxied DNS
-CNAME that points at one of the two tunnels. Ranger fails over by starting the
-workload on the other host, waiting until it answers, and changing that one DNS
-record:
+Each host runs its own tunnel, and a workload's public hostname is a proxied
+CNAME to one of them. Ranger fails over by starting the workload on the other
+host, waiting until it answers, and changing that one DNS record:
 
 ```text
 Normal                               After failover
@@ -22,83 +20,85 @@ app.example.com                      app.example.com
   -> the workload on host A            -> the workload on host B
 ```
 
-The controller is a Python Cloudflare Worker with one Durable Object. It runs
-outside both hosts, so it survives either of them failing. It is not in the
-request path: visitors reach the tunnel directly, and the Worker only runs the
-checks and a status endpoint.
+Ranger handles stateless workloads that are safe to run on both hosts for a
+short time. Kubernetes, a load balancer, or a replicated database would each
+cost more to run than the apps they protect.
 
-## Why it exists
+## How it works
 
-Two small servers at home can run the same apps, but a host failure still
-means downtime until someone notices, starts the app on the other machine, and
-repoints DNS. That can take hours if it happens at night. Ranger does that
-routine part without a person. It checks every five minutes, and with the
-default timings DNS moves 10 to 15 minutes after a workload fails.
+The controller is a Python Cloudflare Worker with one Durable Object, which
+stores all state. It runs off both hosts, so it survives either failing, and it
+is not in the request path. A cron trigger runs one cycle every five minutes.
 
-It deliberately stays small. Ranger handles stateless workloads that are safe
-to run on both hosts for a short time. Kubernetes, a load balancer, or a
-replicated database would each cost more to run than the apps they protect.
+Each host runs an agent: a small HTTP server, using only the Python standard
+library, that reports health and starts or stops the Compose services in its
+local allowlist. It accepts no files, images, or arguments from the
+controller. The controller reaches it through a Workers VPC service over the
+host's existing tunnel, so the agent listens only on loopback.
+
+A workload is ready when its container runs, its Docker health check (if any)
+is healthy, and a local request to its readiness path returns an accepted
+status. Redirects are not followed and the body is not read, so an existing
+page such as `/` or `/healthz` works.
+
+Each cycle, the controller reads both agents and every DNS record
+concurrently, then:
+
+1. Marks a host `unhealthy` after two failed checks in a row. A host that comes
+   back is `recovering` until it has been healthy for ten minutes.
+2. Starts a failover after two failed checks in a row on the serving host, or a
+   failback once the preferred copy has been stable for ten minutes while
+   traffic was elsewhere.
+3. Advances the transition through three phases:
+   - **starting**: start the workload on the target. Once it is ready, point
+     DNS at the target's tunnel and read it back. After fifteen minutes
+     without a ready check, give up and leave DNS alone.
+   - **verifying**: confirm DNS still points at the target and the public
+     hostname returns an accepted status. If the target fails two checks in
+     a row, give up and keep both copies.
+   - **draining**: one cycle later, stop the old copy once its host is
+     reachable.
+
+With the defaults, DNS moves 10 to 15 minutes after a failure. The thresholds
+and deadlines are configurable. State is saved before every start or stop, so
+an interrupted cycle resumes where it left off.
 
 ## What it guarantees
 
-- DNS changes only after the replacement is running and has passed a readiness
-  check.
-- If the replacement fails to start or never becomes ready, DNS stays unchanged.
-- If both hosts are unhealthy, DNS stays unchanged.
-- If the DNS record points anywhere other than the two configured tunnels, or
-  is not a proxied CNAME for the configured hostname, Ranger reports it and
-  leaves the record alone.
+- DNS changes only after the replacement is running and ready.
+- If the replacement never becomes ready, or both hosts are unhealthy, DNS
+  stays unchanged.
+- If the DNS record is not a proxied CNAME for the hostname that points at one
+  of the two tunnels, Ranger reports it and leaves it alone.
 - The old copy is stopped only after DNS reads back the new target, the public
-  hostname returns an accepted status, and a five-minute drain has passed.
+  hostname answers, and one more cycle has passed.
 - Ranger reads and writes DNS records only by their configured zone and record
-  IDs. It never searches for records by name.
+  IDs.
 
-It does not guarantee that only one copy runs. If the old host is unreachable
-after a failover, Ranger cannot stop its copy, so both may run until the old
-host returns. Enroll only workloads that tolerate that. Ranger does not move
-data, replicate databases, or preserve in-flight requests.
+It does not guarantee that only one copy runs: if the old host is unreachable,
+both may run until it returns. It does not move data, preserve in-flight
+requests, or prove which host answered the public check, so Cloudflare must not
+cache the readiness path. It supports exactly two hosts, and Workers VPC is in
+beta.
 
-## How it is built
+A free-plan invocation can make 50 outgoing requests. A cycle makes 2, plus 3
+per workload, plus up to 4 per workload that switches in that cycle.
+
+Ranger runs in production on an arm64 Raspberry Pi and an amd64 laptop. App-stop
+drills have failed over and back as expected; host-shutdown and network-loss
+drills have not run yet.
+
+## Layout
 
 | Path | What it is |
 | --- | --- |
-| `src/entry.py` | Worker and Durable Object entrypoints: cron trigger, authenticated status, HTTP transport |
-| `src/ranger/controller.py` | The reconciliation cycle and email notifications, independent of the Workers runtime |
-| `src/ranger/agent.py` | The node agent: an authenticated HTTP API over Docker Compose |
-| `src/ranger/config.py` | Validation for the controller and agent configurations |
+| `src/entry.py` | Worker and Durable Object entrypoints: cron trigger, status, HTTP transport |
+| `src/ranger/controller.py` | The reconciliation cycle and email notifications |
+| `src/ranger/agent.py` | The node agent |
+| `src/ranger/config.py` | Configuration validation |
 | `src/ranger/cloudflare.py` | Adapters for the agents, the DNS API, and the public probe |
 | `scripts/configure-worker.py` | Renders the Wrangler configuration from a cluster configuration |
 | `deploy/ranger-agent@.service` | systemd unit for the agent |
-| `examples/` | Example cluster and agent configurations and secret files |
-
-The agent uses only the Python standard library. It accepts start, stop, and
-health requests for an allowlist of Compose services, and nothing else. The
-controller reaches the agents through Workers VPC services over the existing
-tunnels, so agents listen only on loopback and have no public hostname.
-
-## Field testing
-
-Ranger runs in production on two hosts with different CPU architectures, an
-arm64 Raspberry Pi and an amd64 laptop, protecting a small stateless web app.
-
-In a drill on 28 September 2026, the app on the preferred host was stopped at
-02:41:36. With the one-minute cycle and two ready checks that Ranger used then,
-the controller:
-
-| Time | Step |
-| --- | --- |
-| 02:43:23 | Started the replacement after the second failed check |
-| 02:45:23 | Switched DNS after two ready checks |
-| 02:46:08 | First public request succeeded through the new host |
-| 02:47:30 | Last failed request |
-| 02:48:23 | Finished the transition |
-
-Visitors saw errors for about 4.5 minutes, then a mix of successes and errors
-for 1.5 minutes while Cloudflare's edges picked up the DNS change. The failback
-had no failed requests, because both copies ran during the switch. Every Worker
-invocation during the drill finished within the free plan's CPU limit.
-
-Host-shutdown and network-loss drills have not run yet.
 
 ## Develop
 
@@ -110,38 +110,19 @@ npm ci
 uv run ruff check src tests scripts
 uv run ruff format --check src tests scripts
 uv run pytest
-```
-
-The Docker Compose integration test is opt-in. It starts a container from
-`tests/fixture/compose.yaml` on loopback port 16740 and removes it afterwards:
-
-```sh
-RUN_DOCKER_TESTS=1 uv run pytest tests/test_agent.py
-```
-
-To check that the Worker still packages, without deploying it:
-
-```sh
+RUN_DOCKER_TESTS=1 uv run pytest tests/test_agent.py  # starts a container on port 16740
 uv run pywrangler deploy --dry-run
 ```
 
-CI runs all of these on every pull request, and on a push to `main` it also
-deploys the Worker. See
-[Operate Ranger](docs/operations.md#deploy-from-github-actions).
+CI runs all of these on every pull request, and deploys the Worker on a push to
+`main`.
 
 ## Documentation
 
-- [How Ranger works](docs/architecture.md) explains the design, the failover
-  cycle, the timing, and the limits.
-- [Operate Ranger](docs/operations.md) covers installing the agents, deploying
-  the controller, adding workloads, email notifications, drills, and rolling
-  back.
-- [Reference](docs/reference.md) lists every configuration key, the agent API,
-  the status fields, and the log events.
-
-## Roadmap
-
-- Independent monitoring of controller execution.
+- [Operate Ranger](docs/operations.md): install, deploy, add workloads, drills,
+  notifications, and rollback.
+- [Reference](docs/reference.md): configuration keys, the agent API, status
+  fields, and log events.
 
 ## License
 
