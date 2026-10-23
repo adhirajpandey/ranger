@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from ranger.agent import Docker
-from ranger.config import configure_readiness
+from ranger.config import READINESS_DEFAULTS
 
 
 @pytest.fixture
@@ -46,9 +46,7 @@ def origin():
 
 def workload(port, **readiness):
     item = {"compose_file": "/unused", "project": "test", "service": "app", "port": port}
-    item.update(readiness)
-    configure_readiness(item)
-    return item
+    return {**item, **READINESS_DEFAULTS, **readiness}
 
 
 def docker_state(monkeypatch, running=True, health="none"):

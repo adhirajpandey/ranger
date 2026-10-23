@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from ranger.config import CYCLE_SECONDS, validate_cluster_config
-from ranger.controller import Reconciler
+from ranger.config import validate_cluster_config
+from ranger.controller import CYCLE_SECONDS, Reconciler
 
 CONFIG = {
     "nodes": {

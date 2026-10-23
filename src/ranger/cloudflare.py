@@ -25,27 +25,20 @@ class CloudflareIO:
     async def change(self, node, name, action):
         return await self.agent(node, f"/workloads/{name}/{action}", "POST")
 
-    async def dns_request(self, spec, method="GET", body=None):
+    async def dns(self, spec, method="GET", body=None):
         # No list endpoint or hostname search, including during recovery.
         url = (
             f"https://api.cloudflare.com/client/v4/zones/{spec['zone_id']}"
             f"/dns_records/{spec['record_id']}"
         )
-        result = await self.request(
-            url,
-            method=method,
-            body=body,
-            headers={"Authorization": f"Bearer {self.dns_token}"},
-        )
+        headers = {"Authorization": f"Bearer {self.dns_token}"}
+        result = await self.request(url, method=method, body=body, headers=headers)
         if not result.get("success"):
             raise RuntimeError("Cloudflare DNS request failed")
         return result["result"]
 
-    async def dns(self, spec):
-        return await self.dns_request(spec)
-
     async def set_dns(self, spec, target):
-        return await self.dns_request(spec, "PATCH", {"content": target})
+        return await self.dns(spec, "PATCH", {"content": target})
 
     async def public(self, spec):
         url = f"https://{spec['hostname']}{spec['readiness_path']}?failover_probe={time.time_ns()}"

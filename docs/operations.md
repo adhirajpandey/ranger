@@ -182,8 +182,9 @@ Run the drill when 10 to 15 minutes of downtime are acceptable.
 
 3. Watch the events. Expect `failover_started` and `start_requested` five to
    ten minutes later, `dns_switched` and `public_check_passed` one cycle after
-   that, then `stop_requested` and `transition_completed` over the next two
-   cycles. Look for `notification_sent` if notifications are on.
+   that, then `transition_completed` one cycle later. The old copy is already
+   stopped, so there is no `stop_requested`. Look for `notification_sent` if
+   notifications are on.
 4. Request the public hostname every few seconds throughout. The first failed
    request and the start of sustained success give the outage length.
 5. Leave the preferred copy stopped. Once the preferred host has been stable

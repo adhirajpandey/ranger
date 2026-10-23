@@ -15,11 +15,7 @@ service bindings and, when configured, the email binding.
 | --- | --- | --- |
 | `nodes` | Yes | Exactly two nodes, keyed by node name |
 | `workloads` | Yes | Workloads, keyed by workload name |
-| `policy` | No | Timing and threshold overrides |
 | `notifications` | No | `from` and `to` email addresses. See [Email notifications](operations.md#email-notifications). |
-
-Node and workload names start with a letter or digit and contain only letters,
-digits, `_`, and `-`.
 
 | Node key | Value |
 | --- | --- |
@@ -33,24 +29,16 @@ digits, `_`, and `-`.
 | `hostname` | Required | Public hostname of the workload |
 | `zone_id` | Required | Cloudflare zone ID |
 | `record_id` | Required | ID of the hostname's DNS record. Each record belongs to one workload. |
-| `readiness_path` | `/` | Path for the public readiness check, without spaces, a query, or a fragment |
+| `readiness_path` | `/` | Path for the public readiness check, without a query |
 | `expected_status` | `[200]` | HTTP statuses that count as ready. Redirects are not followed. |
 
 Use the same `readiness_path` and `expected_status` in the cluster
 configuration and in both agent configurations.
 
-Policy values are positive integers. Times are checked once per five-minute
-cycle, so a value takes effect at the first cycle after it has passed.
-
-| Policy key | Default | Meaning |
-| --- | --- | --- |
-| `probe_timeout` | `5` | Seconds before any outgoing request times out |
-| `failure_threshold` | `2` | Consecutive failed checks that mark a node unhealthy or start a failover |
-| `startup_timeout` | `900` | Seconds a replacement has to become ready. More than 300. |
-| `recovery_stability` | `600` | Seconds of health before a node or preferred copy counts as recovered |
-
-The cycle length is `CYCLE_SECONDS` in `src/ranger/config.py` and the cron
-schedule in `wrangler.jsonc`, which must change together.
+Failure thresholds, deadlines, and timeouts are constants at the top of
+`src/ranger/controller.py` and `src/entry.py`. The cycle length,
+`CYCLE_SECONDS`, must change together with the cron schedule in
+`wrangler.jsonc`.
 
 ## Agent configuration
 
