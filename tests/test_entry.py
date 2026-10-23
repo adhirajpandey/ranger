@@ -34,7 +34,6 @@ def transport(monkeypatch):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     cluster = object.__new__(module.Cluster)
-    cluster.config = {"policy": {"probe_timeout": 5}}
     cluster.entry_module = module
     return cluster, fetch
 
@@ -53,7 +52,7 @@ async def test_status_transport_never_parses_body(transport, status):
     }
     options = fetch.call_args.args[0][1]
     assert options["redirect"] == "manual"
-    assert options["signal"] == 5000
+    assert options["signal"] == 10000
     response.body.cancel.assert_awaited_once()
 
 

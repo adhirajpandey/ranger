@@ -59,9 +59,8 @@ concurrently, then:
    - **draining**: one cycle later, stop the old copy once its host is
      reachable.
 
-With the defaults, DNS moves 10 to 15 minutes after a failure. The thresholds
-and deadlines are configurable. State is saved before every start or stop, so
-an interrupted cycle resumes where it left off.
+DNS moves 10 to 15 minutes after a failure. State is saved before every start
+or stop, so an interrupted cycle resumes where it left off.
 
 ## What it guarantees
 

@@ -4,6 +4,15 @@ import asyncio
 import json
 from datetime import datetime, timezone
 
+# Seconds between cycles. It must match the cron trigger in wrangler.jsonc.
+CYCLE_SECONDS = 300
+# Consecutive failed checks that mark a node unhealthy or start a failover.
+FAILURE_THRESHOLD = 2
+# One cycle to start and one spare: a deadline that lands on a cycle has passed.
+STARTUP_TIMEOUT = 900
+# Seconds of health before a node or preferred copy counts as recovered.
+RECOVERY_STABILITY = 600
+
 
 def event(name, **fields):
     """Emit one structured log line. Workers observability indexes JSON output."""
@@ -110,7 +119,7 @@ class Reconciler:
     """Runs one check per call. The caller supplies validated configuration and the time."""
 
     def __init__(self, config, store, io, notifier=None):
-        self.config, self.policy = config, config["policy"]
+        self.config = config
         self.store, self.io = store, io
         self.notifier = notifier
         self.events = []
@@ -190,7 +199,7 @@ class Reconciler:
         if not available:
             node["failures"] += 1
             node["healthy_since"] = None
-            if node["failures"] >= self.policy["failure_threshold"]:
+            if node["failures"] >= FAILURE_THRESHOLD:
                 node["status"] = "unhealthy"
         else:
             node["failures"] = 0
@@ -198,7 +207,7 @@ class Reconciler:
                 node["healthy_since"] = now
             if node["status"] in {"unhealthy", "recovering"}:
                 node["status"] = "recovering"
-                if now - node["healthy_since"] >= self.policy["recovery_stability"]:
+                if now - node["healthy_since"] >= RECOVERY_STABILITY:
                     node["status"] = "healthy"
             else:
                 node["status"] = "healthy"
@@ -238,12 +247,12 @@ class Reconciler:
         if w["transition"]:
             await self.advance(state, name, spec, w, observations, routed, now)
             return
-        failed = w["failures"].get(routed, 0) >= self.policy["failure_threshold"]
+        failed = w["failures"].get(routed, 0) >= FAILURE_THRESHOLD
         other = next(node for node in self.config["nodes"] if node != routed)
         failback = (
             routed != preferred
             and w["preferred_since"] is not None
-            and (now - w["preferred_since"] >= self.policy["recovery_stability"])
+            and now - w["preferred_since"] >= RECOVERY_STABILITY
         )
         if not failed and not failback:
             return
@@ -261,7 +270,7 @@ class Reconciler:
             "source": routed,
             "target": target,
             "phase": "starting",
-            "deadline": now + self.policy["startup_timeout"],
+            "deadline": now + STARTUP_TIMEOUT,
         }
         await self.store.save(state)
         await self.advance(state, name, spec, w, observations, routed, now)
@@ -296,7 +305,7 @@ class Reconciler:
 
         if not target_ready:
             t["phase"] = "verifying"
-            if w["failures"].get(target, 0) >= self.policy["failure_threshold"]:
+            if w["failures"].get(target, 0) >= FAILURE_THRESHOLD:
                 # Reconsider the observed placement next cycle, keeping both copies.
                 w["transition"] = None
                 w["error"] = "destination failed after cutover"

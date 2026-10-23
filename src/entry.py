@@ -12,13 +12,15 @@ from pyodide.ffi import to_js
 from workers import DurableObject, Request, Response, WorkerEntrypoint
 
 from ranger.cloudflare import CloudflareIO
-from ranger.config import CYCLE_SECONDS, validate_cluster_config
-from ranger.controller import Notifier, Reconciler, describe, event
+from ranger.config import validate_cluster_config
+from ranger.controller import CYCLE_SECONDS, Notifier, Reconciler, describe, event
 
 # The single controller instance. Renaming it starts a new, empty controller state.
 CLUSTER_NAME = "ranger-v1"
 # Status reports unavailable after three missed cycles.
 STALE_AFTER = 3 * CYCLE_SECONDS
+# Seconds before any outgoing request times out.
+REQUEST_TIMEOUT = 10
 
 
 class DurableStore:
@@ -56,7 +58,7 @@ class Cluster(DurableObject):
             "method": method,
             "headers": {"Accept": "*/*" if status_only else "application/json", **(headers or {})},
             "redirect": "manual",
-            "signal": AbortSignal.timeout(self.config["policy"]["probe_timeout"] * 1000),
+            "signal": AbortSignal.timeout(REQUEST_TIMEOUT * 1000),
         }
         if body is not None:
             options["body"] = json.dumps(body)

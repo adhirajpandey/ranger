@@ -3,7 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from ranger.config import CYCLE_SECONDS, validate_agent_config, validate_cluster_config
+from ranger.config import validate_agent_config, validate_cluster_config
+from ranger.controller import CYCLE_SECONDS
 
 ROOT = Path(__file__).parents[1]
 
