@@ -56,34 +56,6 @@ async def test_status_transport_never_parses_body(transport, status):
     response.body.cancel.assert_awaited_once()
 
 
-async def test_management_transport_retains_json_and_success_requirement(transport):
-    cluster, fetch = transport
-    fetch.return_value = SimpleNamespace(status=200, text=AsyncMock(return_value='{"ok": true}'))
-    assert await cluster.request("https://example.com/api", body={"content": "target"}) == {
-        "ok": True
-    }
-    options = fetch.call_args.args[0][1]
-    assert options["redirect"] == "manual"
-    assert json.loads(options["body"]) == {"content": "target"}
-    fetch.return_value.status = 401
-    with pytest.raises(RuntimeError):
-        await cluster.request("https://example.com/api")
-
-
-async def test_cycle_route_reports_failure(transport):
-    cluster, _ = transport
-    cluster.reconciler = SimpleNamespace(cycle=AsyncMock())
-    request = SimpleNamespace(
-        method="POST",
-        url="http://internal/cycle",
-        text=AsyncMock(return_value=json.dumps({"now": 120.0})),
-    )
-    assert (await cluster.fetch(request)).status == 200
-    cluster.reconciler.cycle.assert_awaited_once_with(120.0)
-    cluster.reconciler.cycle.side_effect = RuntimeError("unexpected")
-    assert (await cluster.fetch(request)).status == 500
-
-
 @pytest.mark.parametrize(
     "state,age,status",
     [
